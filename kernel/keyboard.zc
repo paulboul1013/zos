@@ -1,0 +1,166 @@
+// ZOS PS/2 keyboard driver (Task 8).
+//
+// The controller presents IBM PC/AT set-1 make/break scancodes on port 0x60.
+// This module intentionally stops at a small, deterministic ASCII surface:
+// letters, number-row digits, space, Enter, Backspace, and Shift.  Modifier
+// and break handling stay here so the interrupt and shell tasks can consume a
+// single byte without duplicating PS/2 protocol details.
+
+def KEYBOARD_DATA_PORT: u16 = 0x60;
+def KEYBOARD_STATUS_PORT: u16 = 0x64;
+def KEYBOARD_STATUS_OUTPUT_FULL: u8 = 0x01;
+def KEYBOARD_BREAK_MASK: u8 = 0x80;
+def KEYBOARD_LEFT_SHIFT: u8 = 0x2a;
+def KEYBOARD_RIGHT_SHIFT: u8 = 0x36;
+def KEYBOARD_LEFT_SHIFT_BREAK: u8 = 0xaa;
+def KEYBOARD_RIGHT_SHIFT_BREAK: u8 = 0xb6;
+
+// Return values are ASCII bytes.  Zero means that the scancode is a modifier,
+// a key-release event, an unsupported key, or that no byte was available.
+def KEY_EVENT_NONE: u8 = 0;
+def KEY_EVENT_ENTER: u8 = (u8)'\n';
+def KEY_EVENT_BACKSPACE: u8 = (u8)'\b';
+
+// Defined by arch/i686/io.zc.  Keep the port-I/O boundary explicit so this
+// module can be transpiled and syntax-checked as an independent work slice.
+extern fn io_inb(port: u16) -> u8;
+
+let _keyboard_shift: u8 = 0;
+
+@link_name("keyboard_reset")
+fn keyboard_reset() {
+    _keyboard_shift = 0;
+}
+
+@link_name("keyboard_shift_active")
+fn keyboard_shift_active() -> u8 {
+    return _keyboard_shift;
+}
+
+// The status register is safe to poll from the interrupt handler or a shell
+// loop.  Bit 0 is set when port 0x60 contains a scancode.
+@link_name("keyboard_has_data")
+fn keyboard_has_data() -> u8 {
+    return io_inb(KEYBOARD_STATUS_PORT) & KEYBOARD_STATUS_OUTPUT_FULL;
+}
+
+@link_name("keyboard_read_scancode")
+fn keyboard_read_scancode() -> u8 {
+    return io_inb(KEYBOARD_DATA_PORT);
+}
+
+fn _keyboard_letter(scancode: u8) -> u8 {
+    if scancode == 0x10 { return (u8)'q'; }
+    if scancode == 0x11 { return (u8)'w'; }
+    if scancode == 0x12 { return (u8)'e'; }
+    if scancode == 0x13 { return (u8)'r'; }
+    if scancode == 0x14 { return (u8)'t'; }
+    if scancode == 0x15 { return (u8)'y'; }
+    if scancode == 0x16 { return (u8)'u'; }
+    if scancode == 0x17 { return (u8)'i'; }
+    if scancode == 0x18 { return (u8)'o'; }
+    if scancode == 0x19 { return (u8)'p'; }
+    if scancode == 0x1e { return (u8)'a'; }
+    if scancode == 0x1f { return (u8)'s'; }
+    if scancode == 0x20 { return (u8)'d'; }
+    if scancode == 0x21 { return (u8)'f'; }
+    if scancode == 0x22 { return (u8)'g'; }
+    if scancode == 0x23 { return (u8)'h'; }
+    if scancode == 0x24 { return (u8)'j'; }
+    if scancode == 0x25 { return (u8)'k'; }
+    if scancode == 0x26 { return (u8)'l'; }
+    if scancode == 0x2c { return (u8)'z'; }
+    if scancode == 0x2d { return (u8)'x'; }
+    if scancode == 0x2e { return (u8)'c'; }
+    if scancode == 0x2f { return (u8)'v'; }
+    if scancode == 0x30 { return (u8)'b'; }
+    if scancode == 0x31 { return (u8)'n'; }
+    if scancode == 0x32 { return (u8)'m'; }
+    return KEY_EVENT_NONE;
+}
+
+fn _keyboard_number(scancode: u8) -> u8 {
+    if scancode == 0x02 { return (u8)'1'; }
+    if scancode == 0x03 { return (u8)'2'; }
+    if scancode == 0x04 { return (u8)'3'; }
+    if scancode == 0x05 { return (u8)'4'; }
+    if scancode == 0x06 { return (u8)'5'; }
+    if scancode == 0x07 { return (u8)'6'; }
+    if scancode == 0x08 { return (u8)'7'; }
+    if scancode == 0x09 { return (u8)'8'; }
+    if scancode == 0x0a { return (u8)'9'; }
+    if scancode == 0x0b { return (u8)'0'; }
+    return KEY_EVENT_NONE;
+}
+
+fn _keyboard_shifted_letter(ch: u8) -> u8 {
+    if _keyboard_shift == 0 { return ch; }
+    if ch >= (u8)'a' && ch <= (u8)'z' {
+        return ch - ((u8)'a' - (u8)'A');
+    }
+    return ch;
+}
+
+fn _keyboard_shifted_number(scancode: u8, ch: u8) -> u8 {
+    if _keyboard_shift == 0 { return ch; }
+    if scancode == 0x02 { return (u8)'!'; }
+    if scancode == 0x03 { return (u8)'@'; }
+    if scancode == 0x04 { return (u8)'#'; }
+    if scancode == 0x05 { return (u8)'$'; }
+    if scancode == 0x06 { return (u8)'%'; }
+    if scancode == 0x07 { return (u8)'^'; }
+    if scancode == 0x08 { return (u8)'&'; }
+    if scancode == 0x09 { return (u8)'*'; }
+    if scancode == 0x0a { return (u8)'('; }
+    if scancode == 0x0b { return (u8)')'; }
+    return ch;
+}
+
+// Translate one set-1 scancode.  The caller may feed bytes from an IRQ
+// handler, a polling loop, or a deterministic unit test.  Only make codes
+// produce ASCII; break codes are consumed to update Shift and return zero.
+@link_name("keyboard_handle_scancode")
+fn keyboard_handle_scancode(scancode: u8) -> u8 {
+    if scancode == KEYBOARD_LEFT_SHIFT || scancode == KEYBOARD_RIGHT_SHIFT {
+        _keyboard_shift = 1;
+        return KEY_EVENT_NONE;
+    }
+
+    if scancode == KEYBOARD_LEFT_SHIFT_BREAK ||
+       scancode == KEYBOARD_RIGHT_SHIFT_BREAK {
+        _keyboard_shift = 0;
+        return KEY_EVENT_NONE;
+    }
+
+    // Ignore all non-Shift break codes.  Extended (0xe0) prefixes and
+    // navigation keys are deliberately outside this MVP slice.
+    if (scancode & KEYBOARD_BREAK_MASK) != 0 {
+        return KEY_EVENT_NONE;
+    }
+
+    if scancode == 0x1c { return KEY_EVENT_ENTER; }
+    if scancode == 0x0e { return KEY_EVENT_BACKSPACE; }
+    if scancode == 0x39 { return (u8)' '; }
+
+    let number: u8 = _keyboard_number(scancode);
+    if number != KEY_EVENT_NONE {
+        return _keyboard_shifted_number(scancode, number);
+    }
+
+    let letter: u8 = _keyboard_letter(scancode);
+    if letter != KEY_EVENT_NONE {
+        return _keyboard_shifted_letter(letter);
+    }
+
+    return KEY_EVENT_NONE;
+}
+
+// Polling convenience for the early shell.  Interrupt code can call
+// keyboard_handle_scancode directly after reading port 0x60 instead.
+@link_name("keyboard_poll")
+fn keyboard_poll() -> u8 {
+    if keyboard_has_data() == 0 {
+        return KEY_EVENT_NONE;
+    }
+    return keyboard_handle_scancode(keyboard_read_scancode());
+}
