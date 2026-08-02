@@ -1,0 +1,149 @@
+// ZOS keyboard shell (Task 10).
+//
+// The shell is deliberately small and freestanding.  It owns one fixed-size
+// command buffer and consumes ASCII bytes produced by keyboard.zc.  Device
+// code calls `shell_feed_char` for each byte; command execution stays here so
+// the keyboard and interrupt slices do not need to know shell details.
+
+def SHELL_BUFFER_CAPACITY: u32 = 64;
+
+extern fn console_putc(ch: u8);
+extern fn console_write(text: const char*);
+extern fn console_clear();
+extern fn timer_ticks() -> u32;
+
+// Keep one byte for the terminating zero.  The buffer is only compared by
+// this module; it does not rely on libc string functions or hosted stdlib.
+let _shell_buffer: u8[64];
+let _shell_length: u32 = 0;
+
+fn _shell_reset_buffer() {
+    _shell_length = 0;
+    _shell_buffer[0] = (u8)0;
+}
+
+fn _shell_equals(text: const char*) -> bool {
+    let index: u32 = 0;
+
+    if text == NULL {
+        return false;
+    }
+
+    while text[index] != 0 {
+        if index >= _shell_length {
+            return false;
+        }
+        if _shell_buffer[index] != (u8)text[index] {
+            return false;
+        }
+        index = index + 1;
+    }
+
+    return index == _shell_length;
+}
+
+fn _shell_print_u32(value: u32) {
+    let digits: u8[10];
+    let length: u32 = 0;
+
+    if value == 0 {
+        console_putc((u8)'0');
+        return;
+    }
+
+    while value > 0 {
+        digits[length] = (u8)('0' + (u8)(value % 10));
+        length = length + 1;
+        value = value / 10;
+    }
+
+    while length > 0 {
+        length = length - 1;
+        console_putc(digits[length]);
+    }
+}
+
+fn _shell_help() {
+    console_write("commands: help clear about ticks\n");
+}
+
+fn _shell_about() {
+    console_write("Zenc OS shell\n");
+}
+
+fn _shell_ticks() {
+    console_write("ticks: ");
+    _shell_print_u32(timer_ticks());
+    console_putc((u8)'\n');
+}
+
+fn _shell_execute() {
+    if _shell_length == 0 {
+        return;
+    }
+
+    if _shell_equals("help") {
+        _shell_help();
+        return;
+    }
+
+    if _shell_equals("clear") {
+        console_clear();
+        return;
+    }
+
+    if _shell_equals("about") {
+        _shell_about();
+        return;
+    }
+
+    if _shell_equals("ticks") {
+        _shell_ticks();
+        return;
+    }
+
+    console_write("unknown command\n");
+}
+
+@link_name("shell_init")
+fn shell_init() {
+    _shell_reset_buffer();
+    console_write("zos> ");
+}
+
+// Feed one ASCII byte.  Printable bytes are echoed and appended until the
+// fixed buffer is full; Enter executes and starts a fresh prompt; Backspace
+// removes the last byte and erases its echo.  CR is accepted alongside LF so
+// callers can pass either keyboard convention.
+@link_name("shell_feed_char")
+fn shell_feed_char(ch: u8) {
+    if ch == (u8)'\n' || ch == (u8)'\r' {
+        console_putc((u8)'\n');
+        _shell_execute();
+        _shell_reset_buffer();
+        console_write("zos> ");
+        return;
+    }
+
+    if ch == (u8)'\b' {
+        if _shell_length > 0 {
+            _shell_length = _shell_length - 1;
+            _shell_buffer[_shell_length] = (u8)0;
+            console_putc((u8)'\b');
+        }
+        return;
+    }
+
+    if ch < (u8)' ' || ch > (u8)'~' {
+        return;
+    }
+
+    if _shell_length >= SHELL_BUFFER_CAPACITY - 1 {
+        return;
+    }
+
+    _shell_buffer[_shell_length] = ch;
+    _shell_length = _shell_length + 1;
+    _shell_buffer[_shell_length] = (u8)0;
+    console_putc(ch);
+}
