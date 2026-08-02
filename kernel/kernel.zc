@@ -1,10 +1,20 @@
-// Minimal freestanding kernel entry.
+// Freestanding kernel entry and first serial/VGA boot marker.
 //
 // The Multiboot assembly stub calls this symbol with a C ABI compatible
-// `call kernel_main`.  Keep this function side-effect free until the console
-// and serial modules are integrated in later tasks.
+// `call kernel_main`.  Device implementations live in separate .zc modules;
+// these declarations are the narrow integration boundary for this slice.
+extern fn console_init();
+extern fn console_write(text: const char*);
+extern fn serial_init();
+extern fn serial_write(text: const char*);
+
 @link_name("kernel_main")
 fn kernel_main() {
+    console_init();
+    serial_init();
+    console_write("Zenc OS booted\n");
+    serial_write("Zenc OS booted\n");
+
     asm volatile {
         "cli"
     }
