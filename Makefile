@@ -49,7 +49,7 @@ CFLAGS := -std=gnu11 -m32 -ffreestanding -fno-pie -fno-pic \
 ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic -fno-stack-protector
 LDFLAGS := -T arch/i686/linker.ld -nostdlib -ffreestanding -fno-pie -m32
 
-.PHONY: all check-tools transpile check-abi test-toolchain test-console test-interrupt-memory \
+.PHONY: all check-tools check-abi test-toolchain test-console test-interrupt-memory \
 	test-timer test-keyboard test-shell iso qemu test-iso test boot.o kernel clean
 
 all: kernel
@@ -69,8 +69,6 @@ check-tools:
 
 $(BUILD):
 	mkdir -p $@
-
-transpile: $(KERNEL_C) $(MODULE_C)
 
 $(KERNEL_C): $(KERNEL_ZC) | $(BUILD)
 	$(ZC) transpile --freestanding $< -o $@
@@ -123,19 +121,19 @@ qemu: iso
 	@command -v "$(QEMU)" >/dev/null || { echo "missing executable: $(QEMU)" >&2; exit 1; }
 	$(QEMU) -cdrom $(ISO_IMAGE) $(QEMU_FLAGS)
 
-test-console: transpile
+test-console:
 	./tests/console_io_smoke.sh
 
-test-interrupt-memory: transpile
+test-interrupt-memory:
 	./tests/interrupt_memory_static.sh
 
-test-timer: transpile
+test-timer:
 	./tests/timer_static.sh
 
-test-keyboard: transpile
+test-keyboard:
 	./tests/keyboard_static.sh
 
-test-shell: transpile
+test-shell:
 	./tests/shell_static.sh
 
 test-toolchain:
