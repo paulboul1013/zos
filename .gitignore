@@ -1,0 +1,7 @@
+# Generated compiler and emulator output.
+/build/
+
+# Local editor and host-specific files.
+*.swp
+*~
+.DS_Store
