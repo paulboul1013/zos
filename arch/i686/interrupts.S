@@ -127,7 +127,6 @@ zos_irq\n:
     call zos_interrupt_common_no_error
     addl $8, %esp
     iret
-    iret
 .size zos_irq\n, .-zos_irq\n
 .endm
 

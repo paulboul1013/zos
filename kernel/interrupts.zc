@@ -2,9 +2,93 @@
 //
 // The actual IDT gate encoding and vector stubs live in
 // arch/i686/interrupts.S.  This Zenc module owns the C-callable dispatch
-// surface, keeping the common exception path easy to test without touching
-// hardware.  Assembly enters `zos_isr_dispatch(vector, error_code)` with a
-// cdecl-compatible stack and returns through the assembly `iret` epilogue.
+// surface and initialization policy.  Assembly enters
+// `zos_isr_dispatch(vector, error_code)` with a cdecl-compatible stack and
+// returns through the assembly `iret` epilogue.
+
+// Keep the raw boundary narrow: packed IDT descriptors, the `lidt` operation,
+// and an address table for assembly stubs.  Vector selection and lifecycle
+// remain in Zenc below.
+raw {
+    struct zos_idt_gate {
+        uint16_t offset_low;
+        uint16_t selector;
+        uint8_t zero;
+        uint8_t type_attr;
+        uint16_t offset_high;
+    } __attribute__((packed));
+
+    struct zos_idtr {
+        uint16_t limit;
+        uint32_t base;
+    } __attribute__((packed));
+
+    extern void zos_isr0(void);  extern void zos_isr1(void);
+    extern void zos_isr2(void);  extern void zos_isr3(void);
+    extern void zos_isr4(void);  extern void zos_isr5(void);
+    extern void zos_isr6(void);  extern void zos_isr7(void);
+    extern void zos_isr8(void);  extern void zos_isr9(void);
+    extern void zos_isr10(void); extern void zos_isr11(void);
+    extern void zos_isr12(void); extern void zos_isr13(void);
+    extern void zos_isr14(void); extern void zos_isr15(void);
+    extern void zos_isr16(void); extern void zos_isr17(void);
+    extern void zos_isr18(void); extern void zos_isr19(void);
+    extern void zos_isr20(void); extern void zos_isr21(void);
+    extern void zos_isr22(void); extern void zos_isr23(void);
+    extern void zos_isr24(void); extern void zos_isr25(void);
+    extern void zos_isr26(void); extern void zos_isr27(void);
+    extern void zos_isr28(void); extern void zos_isr29(void);
+    extern void zos_isr30(void); extern void zos_isr31(void);
+    extern void zos_irq0(void);  extern void zos_irq1(void);
+
+    typedef void (*zos_isr_stub)(void);
+    static zos_isr_stub const _zos_isr_stubs[32] = {
+        zos_isr0, zos_isr1, zos_isr2, zos_isr3,
+        zos_isr4, zos_isr5, zos_isr6, zos_isr7,
+        zos_isr8, zos_isr9, zos_isr10, zos_isr11,
+        zos_isr12, zos_isr13, zos_isr14, zos_isr15,
+        zos_isr16, zos_isr17, zos_isr18, zos_isr19,
+        zos_isr20, zos_isr21, zos_isr22, zos_isr23,
+        zos_isr24, zos_isr25, zos_isr26, zos_isr27,
+        zos_isr28, zos_isr29, zos_isr30, zos_isr31
+    };
+    static zos_isr_stub const _zos_irq_stubs[2] = { zos_irq0, zos_irq1 };
+
+    static struct zos_idt_gate _zos_idt[256];
+
+    void _zos_idt_set_gate(uint32_t vector, uint32_t handler) {
+        if (vector >= 256 || handler == 0) {
+            return;
+        }
+        struct zos_idt_gate *gate = &_zos_idt[vector];
+        gate->offset_low = (uint16_t)(handler & 0xffffU);
+        gate->selector = 0x08U;
+        gate->zero = 0;
+        gate->type_attr = 0x8eU; /* present, ring 0, 32-bit interrupt gate */
+        gate->offset_high = (uint16_t)((handler >> 16) & 0xffffU);
+    }
+
+    uint32_t _zos_isr_stub_address(uint32_t vector) {
+        if (vector >= 32) {
+            return 0;
+        }
+        return (uint32_t)(unsigned long)_zos_isr_stubs[vector];
+    }
+
+    uint32_t _zos_irq_stub_address(uint32_t irq) {
+        if (irq >= 2) {
+            return 0;
+        }
+        return (uint32_t)(unsigned long)_zos_irq_stubs[irq];
+    }
+
+    void _zos_idt_load(void) {
+        struct zos_idtr idtr;
+        idtr.limit = (uint16_t)(sizeof(_zos_idt) - 1U);
+        idtr.base = (uint32_t)(unsigned long)&_zos_idt[0];
+        __asm__ volatile("lidtl %0" : : "m"(idtr));
+    }
+}
 
 struct InterruptFrame {
     vector: U32;
@@ -33,6 +117,22 @@ fn interrupt_dispatch(vector: U32, error_code: U32) {
     // CPU exceptions 0..31 are fatal until a console panic path exists.
     if (vector < 32) {
         zos_interrupt_halted = 1;
+        return;
+    }
+
+    if (vector == 32) {
+        timer_handle_irq();
+        return;
+    }
+
+    if (vector == 33) {
+        let scancode: U8 = keyboard_read_scancode();
+        let ch: U8 = keyboard_handle_scancode(scancode);
+        if (ch != 0) {
+            // Until the shell owns this path, echo translated keyboard input
+            // directly to VGA.  The shell agent can replace this call later.
+            console_putc(ch);
+        }
     }
 }
 
@@ -70,6 +170,41 @@ fn interrupt_reset_state() {
 extern fn zos_idt_load(idtr: void*);
 extern fn zos_cpu_cli();
 extern fn zos_cpu_sti();
+extern fn _zos_idt_set_gate(vector: U32, handler: U32);
+extern fn _zos_isr_stub_address(vector: U32) -> U32;
+extern fn _zos_irq_stub_address(irq: U32) -> U32;
+extern fn _zos_idt_load();
+
+extern fn timer_handle_irq();
+extern fn keyboard_read_scancode() -> U8;
+extern fn keyboard_handle_scancode(scancode: U8) -> U8;
+extern fn console_putc(ch: U8);
+
+let zos_interrupts_initialized: U32 = 0;
+
+// Install exception vectors 0..31 and the first two remapped PIC vectors.
+// timer_init()/keyboard setup owns PIC programming; this function only
+// creates valid IDT gates and executes lidt.
+@link_name("interrupts_init")
+fn interrupts_init() {
+    interrupts_disable();
+
+    let vector: U32 = 0;
+    while vector < 32 {
+        _zos_idt_set_gate(vector, _zos_isr_stub_address(vector));
+        vector = vector + 1;
+    }
+    _zos_idt_set_gate(32, _zos_irq_stub_address(0));
+    _zos_idt_set_gate(33, _zos_irq_stub_address(1));
+
+    _zos_idt_load();
+    zos_interrupts_initialized = 1;
+}
+
+@link_name("interrupts_is_initialized")
+fn interrupts_is_initialized() -> U32 {
+    return zos_interrupts_initialized;
+}
 
 @link_name("zos_interrupts_enable")
 fn interrupts_enable() {
