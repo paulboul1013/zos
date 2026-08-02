@@ -19,6 +19,11 @@ void timer_handle_irq(void);
 channel 0.  `timer_ticks` is a 32-bit counter and wraps after 2^32 timer IRQs;
 using a 32-bit value keeps reads atomic on the first i686 target.
 
+After the first handled IRQ0, the handler writes the one-time serial marker
+`timer: ok\n` through `serial_write`.  A private boolean guard prevents output
+on subsequent ticks; re-running `timer_init` resets the guard for the next
+boot/test cycle.
+
 ## Hardware behavior
 
 - PIT channel 0 (port `0x40`) is programmed in mode 2 through command port
@@ -29,8 +34,9 @@ using a 32-bit value keeps reads atomic on the first i686 target.
 - Existing PIC masks are restored, except master IRQ0 is unmasked so the
   timer can fire.  IRQ1 and all other lines remain unchanged for later
   keyboard/device tasks.
-- `timer_handle_irq` increments the counter and sends a master-PIC EOI
-  (`outb(0x20, 0x20)`).  It never enables CPU interrupts itself.
+- `timer_handle_irq` increments the counter, sends a master-PIC EOI
+  (`outb(0x20, 0x20)`), then emits the one-time `timer: ok` serial marker.  It
+  never enables CPU interrupts itself.
 
 ## Root dispatcher wiring
 

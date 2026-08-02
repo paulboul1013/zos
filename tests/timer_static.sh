@@ -15,9 +15,12 @@ mkdir -p "$OUT"
 grep -q 'timer_init' "$OUT/timer.c"
 grep -q 'timer_ticks' "$OUT/timer.c"
 grep -q 'timer_handle_irq' "$OUT/timer.c"
+grep -q 'serial_write' "$OUT/timer.c"
+grep -q 'timer: ok' "$OUT/timer.c"
 grep -q '1193182' "$OUT/timer.c"
 grep -q 'PIT_COMMAND: u16 = 0x43' "$ROOT/kernel/timer.zc"
 grep -q 'PIC_MASTER_COMMAND: u16 = 0x20' "$ROOT/kernel/timer.zc"
+grep -q '_timer_runtime_marker_sent' "$ROOT/kernel/timer.zc"
 
 # The freestanding preamble leaves linkage markers for the build system.
 "$CROSS_CC" -ffreestanding -m32 -fno-builtin -fno-stack-protector \

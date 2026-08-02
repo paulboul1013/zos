@@ -24,11 +24,13 @@ def PIC_SLAVE_VECTOR: u8 = 0x28;
 extern fn io_outb(port: u16, value: u8);
 extern fn io_inb(port: u16) -> u8;
 extern fn io_wait();
+extern fn serial_write(text: const char*);
 
 let _timer_tick_count: u32 = 0;
 let _timer_frequency_hz: u32 = 0;
 let _timer_divisor: u16 = 0;
 let _timer_initialized: bool = false;
+let _timer_runtime_marker_sent: bool = false;
 
 // Remap the two 8259 PICs from the BIOS defaults (0x08/0x70) to 0x20/0x28.
 // Preserve all masks except IRQ0: the timer is the only IRQ this module owns.
@@ -95,6 +97,7 @@ fn timer_init(hz: u32) {
     _timer_program_pit(hz);
     _timer_tick_count = 0;
     _timer_initialized = true;
+    _timer_runtime_marker_sent = false;
 }
 
 // Four-byte reads/writes are atomic on i686, so a u32 counter avoids a torn
@@ -127,4 +130,11 @@ fn timer_is_initialized() -> bool {
 fn timer_handle_irq() {
     _timer_tick_count = _timer_tick_count + 1;
     io_outb(PIC_MASTER_COMMAND, PIC_EOI);
+
+    // Emit one serial marker after the first successfully accounted tick.
+    // The flag prevents a 100 Hz timer from flooding the serial console.
+    if !_timer_runtime_marker_sent {
+        serial_write("timer: ok\n");
+        _timer_runtime_marker_sent = true;
+    }
 }
