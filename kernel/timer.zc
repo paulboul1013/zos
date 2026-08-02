@@ -1,0 +1,130 @@
+// ZOS i686 programmable interval timer (PIT) and master PIC integration.
+//
+// The PIT is clocked at approximately 1,193,182 Hz.  `timer_init` programs
+// channel 0 in mode 2 (rate generator), remaps the legacy 8259 PIC to the
+// vector range expected by arch/i686/interrupts.S, and unmasks only IRQ0.
+// It deliberately does not enable CPU interrupts: the caller must install a
+// valid IDT and call interrupts_enable() after all interrupt handlers exist.
+
+def PIT_INPUT_HZ: u32 = 1193182;
+def PIT_CHANNEL_0: u16 = 0x40;
+def PIT_COMMAND: u16 = 0x43;
+def PIT_MODE_RATE_GENERATOR: u8 = 0x34;
+
+def PIC_MASTER_COMMAND: u16 = 0x20;
+def PIC_MASTER_DATA: u16 = 0x21;
+def PIC_SLAVE_COMMAND: u16 = 0xA0;
+def PIC_SLAVE_DATA: u16 = 0xA1;
+def PIC_EOI: u8 = 0x20;
+def PIC_INIT: u8 = 0x11;
+def PIC_MASTER_VECTOR: u8 = 0x20;
+def PIC_SLAVE_VECTOR: u8 = 0x28;
+
+// Defined by arch/i686/io.zc.  Keep this module independently transpileable.
+extern fn io_outb(port: u16, value: u8);
+extern fn io_inb(port: u16) -> u8;
+extern fn io_wait();
+
+let _timer_tick_count: u32 = 0;
+let _timer_frequency_hz: u32 = 0;
+let _timer_divisor: u16 = 0;
+let _timer_initialized: bool = false;
+
+// Remap the two 8259 PICs from the BIOS defaults (0x08/0x70) to 0x20/0x28.
+// Preserve all masks except IRQ0: the timer is the only IRQ this module owns.
+// The keyboard task can unmask IRQ1 when it installs its handler.
+fn _timer_pic_remap() {
+    let master_mask: u8 = io_inb(PIC_MASTER_DATA);
+    let slave_mask: u8 = io_inb(PIC_SLAVE_DATA);
+
+    io_outb(PIC_MASTER_COMMAND, PIC_INIT);
+    io_wait();
+    io_outb(PIC_SLAVE_COMMAND, PIC_INIT);
+    io_wait();
+
+    io_outb(PIC_MASTER_DATA, PIC_MASTER_VECTOR);
+    io_wait();
+    io_outb(PIC_SLAVE_DATA, PIC_SLAVE_VECTOR);
+    io_wait();
+
+    // Master IRQ2 is the cascade line for the slave PIC.
+    io_outb(PIC_MASTER_DATA, (u8)4);
+    io_wait();
+    io_outb(PIC_SLAVE_DATA, (u8)2);
+    io_wait();
+
+    // 8086/88 mode; restore the masks after initialization below.
+    io_outb(PIC_MASTER_DATA, (u8)1);
+    io_wait();
+    io_outb(PIC_SLAVE_DATA, (u8)1);
+    io_wait();
+
+    // Clear bit 0 to deliver IRQ0 while preserving every other mask bit.
+    io_outb(PIC_MASTER_DATA, master_mask & (u8)0xFE);
+    io_outb(PIC_SLAVE_DATA, slave_mask);
+}
+
+fn _timer_program_pit(hz: u32) {
+    let divisor: u32 = PIT_INPUT_HZ / hz;
+    if divisor == 0 {
+        divisor = 1;
+    }
+    if divisor > 0xFFFF {
+        divisor = 0xFFFF;
+    }
+
+    _timer_divisor = (u16)divisor;
+    _timer_frequency_hz = PIT_INPUT_HZ / divisor;
+
+    // Channel 0, access low byte then high byte, mode 2, binary counting.
+    io_outb(PIT_COMMAND, PIT_MODE_RATE_GENERATOR);
+    io_outb(PIT_CHANNEL_0, (u8)(divisor & 0xFF));
+    io_outb(PIT_CHANNEL_0, (u8)((divisor >> 8) & 0xFF));
+}
+
+// Configure IRQ0 at approximately `hz` ticks per second.  A zero frequency
+// selects the conservative 100 Hz default.  CPU interrupts remain disabled
+// until the root interrupt/IDT setup explicitly enables them.
+@link_name("timer_init")
+fn timer_init(hz: u32) {
+    if hz == 0 {
+        hz = 100;
+    }
+
+    _timer_pic_remap();
+    _timer_program_pit(hz);
+    _timer_tick_count = 0;
+    _timer_initialized = true;
+}
+
+// Four-byte reads/writes are atomic on i686, so a u32 counter avoids a torn
+// read from shell code.  The counter wraps after 2^32 IRQ0 deliveries.
+@link_name("timer_ticks")
+fn timer_ticks() -> u32 {
+    return _timer_tick_count;
+}
+
+@link_name("timer_frequency")
+fn timer_frequency() -> u32 {
+    return _timer_frequency_hz;
+}
+
+@link_name("timer_divisor")
+fn timer_divisor() -> u16 {
+    return _timer_divisor;
+}
+
+@link_name("timer_is_initialized")
+fn timer_is_initialized() -> bool {
+    return _timer_initialized;
+}
+
+// Hook called by the common interrupt dispatcher for vector 32 (IRQ0).
+// Acknowledge the master PIC after accounting for the tick.  No `sti` is
+// issued here; the CPU restores IF through `iret` according to the caller's
+// saved interrupt frame.
+@link_name("timer_handle_irq")
+fn timer_handle_irq() {
+    _timer_tick_count = _timer_tick_count + 1;
+    io_outb(PIC_MASTER_COMMAND, PIC_EOI);
+}
