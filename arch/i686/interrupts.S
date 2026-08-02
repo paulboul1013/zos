@@ -26,6 +26,17 @@ zos_cpu_sti:
     ret
 .size zos_cpu_sti, .-zos_cpu_sti
 
+/* Return the selector currently used by the executing code segment.  GRUB
+ * and QEMU's direct -kernel loader do not promise the same GDT layout, so
+ * IDT gates must target the active CS instead of assuming selector 0x08. */
+.globl zos_cpu_cs
+.type zos_cpu_cs, @function
+zos_cpu_cs:
+    xorl %eax, %eax
+    movw %cs, %ax
+    ret
+.size zos_cpu_cs, .-zos_cpu_cs
+
 /* Load an IDT descriptor supplied by the kernel (cdecl: idtr at 4(%esp)). */
 .globl zos_idt_load
 .type zos_idt_load, @function

@@ -7,6 +7,7 @@ CC := $(CROSS_PREFIX)gcc
 LD := $(CROSS_PREFIX)ld
 NM := $(CROSS_PREFIX)nm
 GRUB_FILE ?= grub-file
+GRUB_MKRESCUE ?= grub-mkrescue
 
 BUILD := build
 KERNEL_ZC := kernel/kernel.zc
@@ -14,6 +15,9 @@ KERNEL_C := $(BUILD)/kernel.c
 KERNEL_O := $(BUILD)/kernel.o
 BOOT_O := $(BUILD)/boot.o
 KERNEL_ELF := $(BUILD)/zenc-os.elf
+ISO_ROOT := iso
+ISO_KERNEL := $(ISO_ROOT)/boot/zenc-os.elf
+ISO_IMAGE := $(BUILD)/zenc-os.iso
 INTERRUPTS_S := arch/i686/interrupts.S
 INTERRUPTS_O := $(BUILD)/interrupts.o
 
@@ -36,7 +40,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic -fno-stack-protector
 LDFLAGS := -T arch/i686/linker.ld -nostdlib -ffreestanding -fno-pie -m32
 
 .PHONY: all check-tools transpile check-abi test-console test-interrupt-memory \
-	test-timer test-keyboard test-shell test boot.o kernel clean
+	test-timer test-keyboard test-shell iso test-iso test boot.o kernel clean
 
 all: kernel
 
@@ -44,8 +48,9 @@ check-tools:
 	@set -eu; \
 	for tool in "$(ZC)" "$(CC)" "$(LD)" "$(NM)"; do \
 		if [ ! -x "$$tool" ]; then echo "missing executable: $$tool" >&2; exit 1; fi; \
-		done; \
+		 done; \
 	command -v "$(GRUB_FILE)" >/dev/null || { echo "missing executable: $(GRUB_FILE)" >&2; exit 1; }; \
+	command -v "$(GRUB_MKRESCUE)" >/dev/null || { echo "missing executable: $(GRUB_MKRESCUE)" >&2; exit 1; }; \
 	echo "ZC=$(ZC)"; \
 	echo "CC=$(CC)"; \
 	echo "LD=$(LD)"; \
@@ -94,6 +99,13 @@ kernel: check-abi $(BOOT_O) $(INTERRUPTS_O) $(MODULE_O) arch/i686/linker.ld
 	$(GRUB_FILE) --is-x86-multiboot $(KERNEL_ELF)
 	@echo "linked Multiboot kernel: $(KERNEL_ELF)"
 
+iso: kernel | $(BUILD)
+	mkdir -p $(dir $(ISO_KERNEL))
+	cp $(KERNEL_ELF) $(ISO_KERNEL)
+	$(GRUB_MKRESCUE) -o $(ISO_IMAGE) $(ISO_ROOT)
+	$(GRUB_FILE) --is-x86-multiboot $(ISO_KERNEL)
+	@echo "built GRUB ISO: $(ISO_IMAGE)"
+
 test-console: transpile
 	./tests/console_io_smoke.sh
 
@@ -109,10 +121,13 @@ test-keyboard: transpile
 test-shell: transpile
 	./tests/shell_static.sh
 
-test: kernel test-console test-interrupt-memory test-timer test-keyboard test-shell
+test-iso: iso
+	./tests/iso_test.sh
+
+test: kernel test-console test-interrupt-memory test-timer test-keyboard test-shell test-iso
 	./tests/boot_test.sh
 
 boot.o: $(BOOT_O)
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) $(ISO_KERNEL)

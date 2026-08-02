@@ -1,5 +1,6 @@
 # Generated compiler and emulator output.
 /build/
+iso/boot/zenc-os.elf
 
 # Local editor and host-specific files.
 *.swp

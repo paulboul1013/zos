@@ -40,6 +40,7 @@ raw {
     extern void zos_isr28(void); extern void zos_isr29(void);
     extern void zos_isr30(void); extern void zos_isr31(void);
     extern void zos_irq0(void);  extern void zos_irq1(void);
+    extern uint32_t zos_cpu_cs(void);
 
     typedef void (*zos_isr_stub)(void);
     static zos_isr_stub const _zos_isr_stubs[32] = {
@@ -62,7 +63,7 @@ raw {
         }
         struct zos_idt_gate *gate = &_zos_idt[vector];
         gate->offset_low = (uint16_t)(handler & 0xffffU);
-        gate->selector = 0x08U;
+        gate->selector = (uint16_t)zos_cpu_cs();
         gate->zero = 0;
         gate->type_attr = 0x8eU; /* present, ring 0, 32-bit interrupt gate */
         gate->offset_high = (uint16_t)((handler >> 16) & 0xffffU);

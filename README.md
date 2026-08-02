@@ -6,15 +6,16 @@ compiler is consumed through `ZC` (default: `/home/paulboul/zenc/zc`).
 
 ## Current milestone
 
-Tasks 1–3 provide a freestanding build foundation:
+The current MVP boots a freestanding i686 Multiboot v1 kernel and wires the
+first interactive device path:
 
-1. verify the pinned cross toolchain;
-2. transpile `kernel/kernel.zc` and verify its C ABI symbol;
-3. link a Multiboot v1 kernel ELF with a stack and a safe halt loop.
+- VGA text console and COM1 serial output;
+- IDT/PIC/PIT interrupt setup with a timer tick;
+- PS/2 keyboard scancode translation, Shift handling, and IRQ EOI;
+- a fixed-buffer shell with `help`, `clear`, `about`, and `ticks` commands.
 
-The kernel currently has no VGA, serial, interrupt, keyboard, or shell code.
-Those modules are added by later tasks.  A successful `make kernel` produces
-`build/zenc-os.elf`; `grub-file` checks that its Multiboot header is valid.
+`make kernel` produces `build/zenc-os.elf`.  `make iso` packages it with the
+static GRUB menu in `iso/boot/grub/grub.cfg` as `build/zenc-os.iso`.
 
 ## Prerequisites
 
@@ -25,6 +26,8 @@ The default toolchain paths are the paths used by this workspace:
 /home/paulboul/osdev/opt/cross/bin/i686-elf-gcc
 /home/paulboul/osdev/opt/cross/bin/i686-elf-nm
 grub-file
+grub-mkrescue
+qemu-system-i386
 ```
 
 Override `ZC` or `CROSS_PREFIX` when using a different installation, for
@@ -43,8 +46,20 @@ make check-tools
 make transpile
 make check-abi
 make kernel
+make iso
+make test
 ```
 
-`make kernel` runs the transpile, compile, assembly, link, `nm`, and
-`grub-file --is-x86-multiboot` checks.  The final GRUB ISO and QEMU test are
-introduced after the console, interrupts, keyboard, memory, and shell tasks.
+`make test` runs freestanding transpile/object checks for each module, boots
+the ELF directly with QEMU, builds a GRUB ISO, and boots that ISO with QEMU.
+The ISO test requires all four runtime markers: `Zenc OS booted`,
+`keyboard: ready`, `shell: ready`, and `timer: ok`.
+
+For a manual run:
+
+```sh
+qemu-system-i386 -cdrom build/zenc-os.iso -serial stdio -display none -monitor none
+```
+
+Type `help` at the `zos>` prompt through a QEMU keyboard/monitor setup to
+exercise the shell path.
