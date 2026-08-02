@@ -1,0 +1,76 @@
+// ZOS i686 bump allocator (Task 9).
+//
+// The allocator deliberately has no free list: allocations live until the
+// next reboot.  The boot/linker integration supplies a physical/identity
+// mapped heap interval bounded by __kernel_end and __heap_end.  All addresses
+// are 32-bit because the first ZOS target is i686.
+
+let zos_heap_start: U32 = 0;
+let zos_heap_cursor: U32 = 0;
+let zos_heap_limit: U32 = 0;
+
+// Configure the allocator before the first allocation.  `start` must be at
+// or above the linker-provided __kernel_end address and `end` must be the
+// exclusive upper bound of the usable heap region.
+@link_name("zos_memory_init")
+fn memory_init(start: U32, end: U32) {
+    zos_heap_start = start;
+    zos_heap_cursor = start;
+    zos_heap_limit = end;
+}
+
+@link_name("zos_memory_reset")
+fn memory_reset() {
+    zos_heap_start = 0;
+    zos_heap_cursor = 0;
+    zos_heap_limit = 0;
+}
+
+@link_name("zos_memory_used")
+fn memory_used() -> U32 {
+    if (zos_heap_cursor == 0 || zos_heap_cursor < zos_heap_start) {
+        return 0;
+    }
+    return zos_heap_cursor - zos_heap_start;
+}
+
+@link_name("zos_memory_limit")
+fn memory_limit() -> U32 {
+    return zos_heap_limit;
+}
+
+// Allocate `size` bytes aligned to a power-of-two `align` boundary.  A zero
+// size, invalid alignment, overflow, or exhausted heap returns null.  The
+// caller owns no release operation; this is intentional for the kernel MVP.
+@link_name("zos_memory_alloc")
+fn memory_alloc(size: U32, align: U32) -> void* {
+    if (size == 0 || zos_heap_cursor == 0 || zos_heap_limit == 0) {
+        return (void*)0;
+    }
+
+    // Restrict alignment to powers of two so the mask calculation is safe.
+    if (align == 0 || (align & (align - 1)) != 0) {
+        return (void*)0;
+    }
+
+    let mask = align - 1;
+    let aligned = (zos_heap_cursor + mask) & ~mask;
+    if (aligned < zos_heap_cursor || aligned >= zos_heap_limit) {
+        return (void*)0;
+    }
+
+    let next = aligned + size;
+    if (next < aligned || next > zos_heap_limit) {
+        return (void*)0;
+    }
+
+    zos_heap_cursor = next;
+    return (void*)aligned;
+}
+
+// Convenience wrapper used by small kernel objects that need the natural
+// i686 word alignment.
+@link_name("zos_memory_alloc_word")
+fn memory_alloc_word(size: U32) -> void* {
+    return memory_alloc(size, 4);
+}

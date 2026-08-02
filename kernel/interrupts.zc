@@ -1,0 +1,82 @@
+// ZOS i686 interrupt contract (Task 6).
+//
+// The actual IDT gate encoding and vector stubs live in
+// arch/i686/interrupts.S.  This Zenc module owns the C-callable dispatch
+// surface, keeping the common exception path easy to test without touching
+// hardware.  Assembly enters `zos_isr_dispatch(vector, error_code)` with a
+// cdecl-compatible stack and returns through the assembly `iret` epilogue.
+
+struct InterruptFrame {
+    vector: U32;
+    error_code: U32;
+    eip: U32;
+    cs: U32;
+    eflags: U32;
+    user_esp: U32;
+    user_ss: U32;
+}
+
+let zos_interrupt_last_vector: U32 = 0xffffffff;
+let zos_interrupt_last_error: U32 = 0;
+let zos_interrupt_count: U32 = 0;
+let zos_interrupt_halted: U32 = 0;
+
+// Called from every exception/IRQ stub.  The default policy records the
+// vector and error code, then marks fatal CPU exceptions as halted.  A later
+// shell/console task can replace the policy while preserving this ABI.
+@link_name("zos_isr_dispatch")
+fn interrupt_dispatch(vector: U32, error_code: U32) {
+    zos_interrupt_last_vector = vector;
+    zos_interrupt_last_error = error_code;
+    zos_interrupt_count = zos_interrupt_count + 1;
+
+    // CPU exceptions 0..31 are fatal until a console panic path exists.
+    if (vector < 32) {
+        zos_interrupt_halted = 1;
+    }
+}
+
+@link_name("zos_interrupt_get_last_vector")
+fn interrupt_last_vector() -> U32 {
+    return zos_interrupt_last_vector;
+}
+
+@link_name("zos_interrupt_get_last_error")
+fn interrupt_last_error() -> U32 {
+    return zos_interrupt_last_error;
+}
+
+@link_name("zos_interrupt_get_count")
+fn interrupt_count() -> U32 {
+    return zos_interrupt_count;
+}
+
+@link_name("zos_interrupt_is_halted")
+fn interrupt_halted() -> U32 {
+    return zos_interrupt_halted;
+}
+
+@link_name("zos_interrupt_reset_state")
+fn interrupt_reset_state() {
+    zos_interrupt_last_vector = (U32)0xffffffff;
+    zos_interrupt_last_error = 0;
+    zos_interrupt_count = 0;
+    zos_interrupt_halted = 0;
+}
+
+// These functions are intentionally tiny C-callable wrappers around the
+// assembly helpers.  They let kernel/kernel.zc remain unaware of inline asm
+// syntax; the implementation is supplied by arch/i686/interrupts.S.
+extern fn zos_idt_load(idtr: void*);
+extern fn zos_cpu_cli();
+extern fn zos_cpu_sti();
+
+@link_name("zos_interrupts_enable")
+fn interrupts_enable() {
+    zos_cpu_sti();
+}
+
+@link_name("zos_interrupts_disable")
+fn interrupts_disable() {
+    zos_cpu_cli();
+}
