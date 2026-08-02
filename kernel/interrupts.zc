@@ -109,8 +109,7 @@ let zos_interrupt_halted: U32 = 0;
 // Called from every exception/IRQ stub.  The default policy records the
 // vector and error code, then marks fatal CPU exceptions as halted.  A later
 // shell/console task can replace the policy while preserving this ABI.
-@link_name("zos_isr_dispatch")
-fn interrupt_dispatch(vector: U32, error_code: U32) {
+fn zos_isr_dispatch(vector: U32, error_code: U32) {
     zos_interrupt_last_vector = vector;
     zos_interrupt_last_error = error_code;
     zos_interrupt_count = zos_interrupt_count + 1;
@@ -134,28 +133,23 @@ fn interrupt_dispatch(vector: U32, error_code: U32) {
     }
 }
 
-@link_name("zos_interrupt_get_last_vector")
-fn interrupt_last_vector() -> U32 {
+fn zos_interrupt_get_last_vector() -> U32 {
     return zos_interrupt_last_vector;
 }
 
-@link_name("zos_interrupt_get_last_error")
-fn interrupt_last_error() -> U32 {
+fn zos_interrupt_get_last_error() -> U32 {
     return zos_interrupt_last_error;
 }
 
-@link_name("zos_interrupt_get_count")
-fn interrupt_count() -> U32 {
+fn zos_interrupt_get_count() -> U32 {
     return zos_interrupt_count;
 }
 
-@link_name("zos_interrupt_is_halted")
-fn interrupt_halted() -> U32 {
+fn zos_interrupt_is_halted() -> U32 {
     return zos_interrupt_halted;
 }
 
-@link_name("zos_interrupt_reset_state")
-fn interrupt_reset_state() {
+fn zos_interrupt_reset_state() {
     zos_interrupt_last_vector = (U32)0xffffffff;
     zos_interrupt_last_error = 0;
     zos_interrupt_count = 0;
@@ -182,9 +176,8 @@ let zos_interrupts_initialized: U32 = 0;
 // Install exception vectors 0..31 and the first two remapped PIC vectors.
 // timer_init()/keyboard setup owns PIC programming; this function only
 // creates valid IDT gates and executes lidt.
-@link_name("interrupts_init")
 fn interrupts_init() {
-    interrupts_disable();
+    zos_interrupts_disable();
 
     let vector: U32 = 0;
     while vector < 32 {
@@ -198,17 +191,14 @@ fn interrupts_init() {
     zos_interrupts_initialized = 1;
 }
 
-@link_name("interrupts_is_initialized")
 fn interrupts_is_initialized() -> U32 {
     return zos_interrupts_initialized;
 }
 
-@link_name("zos_interrupts_enable")
-fn interrupts_enable() {
+fn zos_interrupts_enable() {
     zos_cpu_sti();
 }
 
-@link_name("zos_interrupts_disable")
-fn interrupts_disable() {
+fn zos_interrupts_disable() {
     zos_cpu_cli();
 }

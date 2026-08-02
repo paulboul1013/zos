@@ -1,11 +1,19 @@
 # ZOS i686 freestanding build (Tasks 1–3).
 
-ZC ?= /home/paulboul/zenc/zc
-CROSS_PREFIX ?= /home/paulboul/osdev/opt/cross/bin/i686-elf-
+# Discover tools from PATH by default.  Command-line or environment values
+# still take precedence, for example:
+#   make ZC=/opt/zenc/zc CROSS_PREFIX=/opt/cross/bin/i686-elf- kernel
+ZC ?= $(shell command -v zc 2>/dev/null)
+I686_GCC := $(shell command -v i686-elf-gcc 2>/dev/null)
+CROSS_PREFIX ?= $(if $(I686_GCC),$(dir $(I686_GCC))i686-elf-,i686-elf-)
 
 CC := $(CROSS_PREFIX)gcc
 LD := $(CROSS_PREFIX)ld
 NM := $(CROSS_PREFIX)nm
+CROSS_CC := $(CC)
+CROSS_LD := $(LD)
+CROSS_NM := $(NM)
+export ZC CROSS_PREFIX CROSS_CC CROSS_LD CROSS_NM
 GRUB_FILE ?= grub-file
 GRUB_MKRESCUE ?= grub-mkrescue
 QEMU ?= qemu-system-i386
@@ -41,7 +49,7 @@ CFLAGS := -std=gnu11 -m32 -ffreestanding -fno-pie -fno-pic \
 ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic -fno-stack-protector
 LDFLAGS := -T arch/i686/linker.ld -nostdlib -ffreestanding -fno-pie -m32
 
-.PHONY: all check-tools transpile check-abi test-console test-interrupt-memory \
+.PHONY: all check-tools transpile check-abi test-toolchain test-console test-interrupt-memory \
 	test-timer test-keyboard test-shell iso qemu test-iso test boot.o kernel clean
 
 all: kernel
@@ -49,7 +57,7 @@ all: kernel
 check-tools:
 	@set -eu; \
 	for tool in "$(ZC)" "$(CC)" "$(LD)" "$(NM)"; do \
-		if [ ! -x "$$tool" ]; then echo "missing executable: $$tool" >&2; exit 1; fi; \
+		if [ -z "$$tool" ] || ! command -v "$$tool" >/dev/null 2>&1; then echo "missing executable: $$tool" >&2; exit 1; fi; \
 		 done; \
 	command -v "$(GRUB_FILE)" >/dev/null || { echo "missing executable: $(GRUB_FILE)" >&2; exit 1; }; \
 	command -v "$(GRUB_MKRESCUE)" >/dev/null || { echo "missing executable: $(GRUB_MKRESCUE)" >&2; exit 1; }; \
@@ -130,10 +138,13 @@ test-keyboard: transpile
 test-shell: transpile
 	./tests/shell_static.sh
 
+test-toolchain:
+	./tests/make_toolchain_discovery.sh
+
 test-iso: iso
 	./tests/iso_test.sh
 
-test: kernel test-console test-interrupt-memory test-timer test-keyboard test-shell test-iso
+test: kernel test-toolchain test-console test-interrupt-memory test-timer test-keyboard test-shell test-iso
 	./tests/boot_test.sh
 
 boot.o: $(BOOT_O)

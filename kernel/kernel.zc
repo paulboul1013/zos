@@ -30,7 +30,6 @@ raw {
 extern fn _zos_kernel_heap_start() -> U32;
 extern fn _zos_kernel_heap_end() -> U32;
 
-@link_name("kernel_main")
 fn kernel_main() {
     console_init();
     serial_init();

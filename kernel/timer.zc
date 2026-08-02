@@ -4,7 +4,7 @@
 // channel 0 in mode 2 (rate generator), remaps the legacy 8259 PIC to the
 // vector range expected by arch/i686/interrupts.S, and unmasks only IRQ0.
 // It deliberately does not enable CPU interrupts: the caller must install a
-// valid IDT and call interrupts_enable() after all interrupt handlers exist.
+// valid IDT and call zos_interrupts_enable() after all interrupt handlers exist.
 
 def PIT_INPUT_HZ: u32 = 1193182;
 def PIT_CHANNEL_0: u16 = 0x40;
@@ -87,7 +87,6 @@ fn _timer_program_pit(hz: u32) {
 // Configure IRQ0 at approximately `hz` ticks per second.  A zero frequency
 // selects the conservative 100 Hz default.  CPU interrupts remain disabled
 // until the root interrupt/IDT setup explicitly enables them.
-@link_name("timer_init")
 fn timer_init(hz: u32) {
     if hz == 0 {
         hz = 100;
@@ -102,22 +101,18 @@ fn timer_init(hz: u32) {
 
 // Four-byte reads/writes are atomic on i686, so a u32 counter avoids a torn
 // read from shell code.  The counter wraps after 2^32 IRQ0 deliveries.
-@link_name("timer_ticks")
 fn timer_ticks() -> u32 {
     return _timer_tick_count;
 }
 
-@link_name("timer_frequency")
 fn timer_frequency() -> u32 {
     return _timer_frequency_hz;
 }
 
-@link_name("timer_divisor")
 fn timer_divisor() -> u16 {
     return _timer_divisor;
 }
 
-@link_name("timer_is_initialized")
 fn timer_is_initialized() -> bool {
     return _timer_initialized;
 }
@@ -126,7 +121,6 @@ fn timer_is_initialized() -> bool {
 // Acknowledge the master PIC after accounting for the tick.  No `sti` is
 // issued here; the CPU restores IF through `iret` according to the caller's
 // saved interrupt frame.
-@link_name("timer_handle_irq")
 fn timer_handle_irq() {
     _timer_tick_count = _timer_tick_count + 1;
     io_outb(PIC_MASTER_COMMAND, PIC_EOI);

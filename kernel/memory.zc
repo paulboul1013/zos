@@ -12,38 +12,33 @@ let zos_heap_limit: U32 = 0;
 // Configure the allocator before the first allocation.  `start` must be at
 // or above the linker-provided __kernel_end address and `end` must be the
 // exclusive upper bound of the usable heap region.
-@link_name("zos_memory_init")
-fn memory_init(start: U32, end: U32) {
+fn zos_memory_init(start: U32, end: U32) {
     zos_heap_start = start;
     zos_heap_cursor = start;
     zos_heap_limit = end;
 }
 
-@link_name("zos_memory_reset")
-fn memory_reset() {
+fn zos_memory_reset() {
     zos_heap_start = 0;
     zos_heap_cursor = 0;
     zos_heap_limit = 0;
 }
 
-@link_name("zos_memory_used")
-fn memory_used() -> U32 {
+fn zos_memory_used() -> U32 {
     if (zos_heap_cursor == 0 || zos_heap_cursor < zos_heap_start) {
         return 0;
     }
     return zos_heap_cursor - zos_heap_start;
 }
 
-@link_name("zos_memory_limit")
-fn memory_limit() -> U32 {
+fn zos_memory_limit() -> U32 {
     return zos_heap_limit;
 }
 
 // Allocate `size` bytes aligned to a power-of-two `align` boundary.  A zero
 // size, invalid alignment, overflow, or exhausted heap returns null.  The
 // caller owns no release operation; this is intentional for the kernel MVP.
-@link_name("zos_memory_alloc")
-fn memory_alloc(size: U32, align: U32) -> void* {
+fn zos_memory_alloc(size: U32, align: U32) -> void* {
     if (size == 0 || zos_heap_cursor == 0 || zos_heap_limit == 0) {
         return (void*)0;
     }
@@ -70,7 +65,6 @@ fn memory_alloc(size: U32, align: U32) -> void* {
 
 // Convenience wrapper used by small kernel objects that need the natural
 // i686 word alignment.
-@link_name("zos_memory_alloc_word")
-fn memory_alloc_word(size: U32) -> void* {
-    return memory_alloc(size, 4);
+fn zos_memory_alloc_word(size: U32) -> void* {
+    return zos_memory_alloc(size, 4);
 }

@@ -1,8 +1,9 @@
 # ZOS shell contract
 
-Task 10 provides the keyboard-to-command boundary for the i686 MVP.  The
+Task 10 provides the keyboard-to-command boundary for the i686 MVP. The
 keyboard driver translates set-1 scancodes into ASCII bytes; the interrupt or
-polling loop forwards each non-zero byte to `shell_feed_char`.
+polling loop forwards each non-zero byte to `shell_feed_char`. The shell keeps
+only the `clear` command; informational commands are intentionally omitted.
 
 ## Public API
 
@@ -26,15 +27,15 @@ or call hosted C library code.
 
 | Command | Behavior |
 | --- | --- |
-| `help` | Lists `help`, `clear`, `about`, and `ticks`. |
 | `clear` | Calls `console_clear`, then returns to the prompt. |
-| `about` | Prints the Zenc OS shell marker. |
-| `ticks` | Prints `timer_ticks()` as an unsigned decimal value. |
 | anything else | Prints `unknown command`. |
+
+`help`, `about`, and `ticks` are not built-in commands. They are treated as
+unknown commands and print `unknown command`.
 
 ## Integration order
 
-The root integrator should call the APIs in this order after console and timer
+The root integrator should call the APIs in this order after console
 initialization:
 
 1. `shell_init()` once after the VGA console is ready.
