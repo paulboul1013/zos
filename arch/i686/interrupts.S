@@ -59,22 +59,22 @@ zos_isr\n:
 .size zos_isr\n, .-zos_isr\n
 .endm
 
-/* Error-code exceptions: stack on entry is vector, error, eip, cs, eflags. */
+/* Error-code exceptions: after pushal, ret/vector/error are at +32/+36/+40. */
 zos_interrupt_common_error:
     pushal
-    pushl 36(%esp)      /* error_code (after pushal: vector,error,...) */
-    pushl 36(%esp)      /* vector (after first argument push) */
+    pushl 40(%esp)      /* error_code */
+    pushl 40(%esp)      /* vector (offset grows after first push) */
     call zos_isr_dispatch
     addl $8, %esp
     popal
     addl $4, %esp       /* normalized vector; CPU error remains for iret */
     iret
 
-/* Synthetic-error exceptions: stack is vector, zero, eip, cs, eflags. */
+/* Synthetic-error exceptions: after pushal, ret/vector/zero are +32/+36/+40. */
 zos_interrupt_common_no_error:
     pushal
-    pushl 36(%esp)      /* error_code */
-    pushl 36(%esp)      /* vector */
+    pushl 40(%esp)      /* synthetic error code */
+    pushl 40(%esp)      /* vector (offset grows after first push) */
     call zos_isr_dispatch
     addl $8, %esp
     popal

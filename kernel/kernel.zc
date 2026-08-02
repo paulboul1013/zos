@@ -7,6 +7,28 @@ extern fn console_init();
 extern fn console_write(text: const char*);
 extern fn serial_init();
 extern fn serial_write(text: const char*);
+extern fn zos_memory_init(start: U32, end: U32);
+extern fn interrupts_init();
+extern fn timer_init(hz: U32);
+extern fn keyboard_init();
+extern fn shell_init();
+extern fn zos_interrupts_enable();
+
+raw {
+    extern char __kernel_end;
+    extern char __heap_end;
+
+    static uint32_t _zos_kernel_heap_start(void) {
+        return (uint32_t)(unsigned long)&__kernel_end;
+    }
+
+    static uint32_t _zos_kernel_heap_end(void) {
+        return (uint32_t)(unsigned long)&__heap_end;
+    }
+}
+
+extern fn _zos_kernel_heap_start() -> U32;
+extern fn _zos_kernel_heap_end() -> U32;
 
 @link_name("kernel_main")
 fn kernel_main() {
@@ -15,7 +37,22 @@ fn kernel_main() {
     console_write("Zenc OS booted\n");
     serial_write("Zenc OS booted\n");
 
-    asm volatile {
-        "cli"
+    // Keep all device setup interrupt-safe: IDT first, then PIC/PIT and PS/2
+    // masks, then shell state, and only finally enable hardware IRQ delivery.
+    zos_memory_init(_zos_kernel_heap_start(), _zos_kernel_heap_end());
+    interrupts_init();
+    timer_init((U32)100);
+    keyboard_init();
+    shell_init();
+    serial_write("keyboard: ready\n");
+    serial_write("shell: ready\n");
+    zos_interrupts_enable();
+
+    // Keep IF enabled so PIT/PS2 IRQs can wake this idle loop.  The kernel
+    // never returns to the boot stub after device initialization.
+    while true {
+        asm volatile {
+            "hlt"
+        }
     }
 }

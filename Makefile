@@ -20,7 +20,8 @@ INTERRUPTS_O := $(BUILD)/interrupts.o
 # Module sources are compiled as separate freestanding translation units so
 # each agent can own one .zc file without relying on hosted imports.
 MODULE_ZC := arch/i686/io.zc kernel/console.zc kernel/serial.zc \
-	kernel/interrupts.zc kernel/memory.zc kernel/timer.zc kernel/keyboard.zc
+	kernel/interrupts.zc kernel/memory.zc kernel/timer.zc kernel/keyboard.zc \
+	kernel/shell.zc
 MODULE_C := $(patsubst %.zc,$(BUILD)/%.c,$(MODULE_ZC))
 MODULE_O := $(patsubst %.zc,$(BUILD)/%.o,$(MODULE_ZC))
 
@@ -35,7 +36,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic -fno-stack-protector
 LDFLAGS := -T arch/i686/linker.ld -nostdlib -ffreestanding -fno-pie -m32
 
 .PHONY: all check-tools transpile check-abi test-console test-interrupt-memory \
-	test-timer test-keyboard test boot.o kernel clean
+	test-timer test-keyboard test-shell test boot.o kernel clean
 
 all: kernel
 
@@ -69,7 +70,7 @@ $(BUILD)/%.o: $(BUILD)/%.c
 check-abi: $(KERNEL_O)
 	@set -eu; \
 	$(NM) -g --defined-only $(KERNEL_O) | awk '$$3 == "kernel_main" { found = 1 } END { exit !found }'; \
-	unexpected=$$($(NM) -u $(KERNEL_O) | awk '$$2 !~ /^(console_init|console_write|serial_init|serial_write)$$/'); \
+	unexpected=$$($(NM) -u $(KERNEL_O) | awk '$$2 !~ /^(console_init|console_write|serial_init|serial_write|zos_memory_init|interrupts_init|zos_interrupts_enable|timer_init|keyboard_init|shell_init|__kernel_end|__heap_end)$$/'); \
 	if [ -n "$$unexpected" ]; then \
 		echo "unexpected unresolved symbols in $(KERNEL_O):" >&2; \
 		echo "$$unexpected" >&2; exit 1; \
@@ -105,7 +106,10 @@ test-timer: transpile
 test-keyboard: transpile
 	./tests/keyboard_static.sh
 
-test: kernel test-console test-interrupt-memory test-timer test-keyboard
+test-shell: transpile
+	./tests/shell_static.sh
+
+test: kernel test-console test-interrupt-memory test-timer test-keyboard test-shell
 	./tests/boot_test.sh
 
 boot.o: $(BOOT_O)
