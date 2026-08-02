@@ -1,0 +1,97 @@
+// ZOS VGA text console.
+//
+// Text layout and cursor policy stay in Zenc.  Only the volatile write to
+// the VGA memory window crosses into raw C, because that is the boundary
+// where Zenc currently cannot express a volatile MMIO pointer reliably.
+
+def CONSOLE_COLUMNS: u16 = 80;
+def CONSOLE_ROWS: u16 = 25;
+
+raw {
+    static volatile uint16_t* const _zos_vga_text =
+        (volatile uint16_t*)0xB8000;
+
+    static void _zos_vga_write_cell(uint32_t index, uint16_t value) {
+        _zos_vga_text[index] = value;
+    }
+
+    static void _zos_vga_fill(uint16_t value) {
+        uint32_t i;
+        for (i = 0; i < 2000U; ++i) {
+            _zos_vga_text[i] = value;
+        }
+    }
+}
+
+extern fn _zos_vga_write_cell(index: u32, value: u16);
+extern fn _zos_vga_fill(value: u16);
+
+let _console_column: u16 = 0;
+let _console_row: u16 = 0;
+let _console_color: u8 = 0x07;
+
+fn _console_cell(ch: u8) -> u16 {
+    return ((u16)_console_color << 8) | (u16)ch;
+}
+
+fn _console_redraw_cursor() {
+    let index: u32 = (u32)_console_row * (u32)CONSOLE_COLUMNS +
+                     (u32)_console_column;
+    _zos_vga_write_cell(index, _console_cell((u8)' '));
+}
+
+fn console_set_color(color: u8) {
+    _console_color = color;
+}
+
+fn console_clear() {
+    _zos_vga_fill(_console_cell((u8)' '));
+    _console_column = (u16)0;
+    _console_row = (u16)0;
+}
+
+fn console_init() {
+    console_clear();
+}
+
+fn console_putc(ch: u8) {
+    if ch == (u8)'\n' {
+        _console_column = (u16)0;
+        _console_row = _console_row + 1;
+    } else if ch == (u8)'\r' {
+        _console_column = (u16)0;
+    } else if ch == (u8)'\b' {
+        if _console_column > 0 {
+            _console_column = _console_column - 1;
+            _console_redraw_cursor();
+        }
+    } else {
+        let index: u32 = (u32)_console_row * (u32)CONSOLE_COLUMNS +
+                         (u32)_console_column;
+        _zos_vga_write_cell(index, _console_cell(ch));
+        _console_column = _console_column + 1;
+        if _console_column >= CONSOLE_COLUMNS {
+            _console_column = (u16)0;
+            _console_row = _console_row + 1;
+        }
+    }
+
+    // This intentionally uses a full clear instead of scrolling a buffer.
+    // It keeps the first console slice deterministic while still preventing
+    // writes past the 80x25 VGA window.
+    if _console_row >= CONSOLE_ROWS {
+        console_clear();
+    }
+}
+
+fn console_write(text: const char*) {
+    if text == NULL {
+        return;
+    }
+
+    let index: usize = 0;
+    while text[index] != 0 {
+        console_putc((u8)text[index]);
+        index = index + 1;
+    }
+}

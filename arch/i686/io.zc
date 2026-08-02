@@ -1,0 +1,41 @@
+// ZOS i686 port-I/O boundary.
+//
+// The compiler currently has no stable way to express an architecture
+// intrinsic or an I/O port access as freestanding Zenc.  Keep those three
+// instructions in this raw-C block; callers use the small, typed Zenc API
+// below.  The volatile qualifier is intentional: an I/O access is an
+// observable side effect and must not be removed or reordered by the C
+// compiler.
+
+raw {
+    static void _zos_i686_outb(uint16_t port, uint8_t value) {
+        __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
+    }
+
+    static uint8_t _zos_i686_inb(uint16_t port) {
+        uint8_t value;
+        __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
+        return value;
+    }
+
+    static void _zos_i686_io_wait(void) {
+        __asm__ volatile ("outb %%al, $0x80" : : "a"((uint8_t)0));
+    }
+}
+
+extern fn _zos_i686_outb(port: u16, value: u8);
+extern fn _zos_i686_inb(port: u16) -> u8;
+extern fn _zos_i686_io_wait();
+
+// Public port-I/O surface used by serial, keyboard, and PIC/PIT drivers.
+fn io_outb(port: u16, value: u8) {
+    _zos_i686_outb(port, value);
+}
+
+fn io_inb(port: u16) -> u8 {
+    return _zos_i686_inb(port);
+}
+
+fn io_wait() {
+    _zos_i686_io_wait();
+}

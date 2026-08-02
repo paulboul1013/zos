@@ -1,0 +1,67 @@
+// ZOS COM1 (16550-compatible UART) serial output.
+//
+// UART register accesses go through arch/i686/io.zc.  This module owns the
+// UART configuration and string/byte policy; it never reaches into port
+// I/O with inline assembly itself.
+
+def SERIAL_COM1: u16 = 0x3F8;
+def SERIAL_DATA: u16 = 0;
+def SERIAL_INTERRUPT_ENABLE: u16 = 1;
+def SERIAL_FIFO_CONTROL: u16 = 2;
+def SERIAL_LINE_CONTROL: u16 = 3;
+def SERIAL_MODEM_CONTROL: u16 = 4;
+def SERIAL_LINE_STATUS: u16 = 5;
+
+def SERIAL_LCR_DLAB: u8 = 0x80;
+def SERIAL_LCR_8N1: u8 = 0x03;
+def SERIAL_FIFO_ENABLE: u8 = 0xC7;
+def SERIAL_MODEM_READY: u8 = 0x0B;
+def SERIAL_LSR_TX_EMPTY: u8 = 0x20;
+
+// Defined by arch/i686/io.zc.  Keep these prototypes here so this module can
+// be transpiled and syntax-checked on its own.
+extern fn io_outb(port: u16, value: u8);
+extern fn io_inb(port: u16) -> u8;
+
+let _serial_initialized: bool = false;
+
+fn _serial_port(offset: u16) -> u16 {
+    return (u16)(SERIAL_COM1 + offset);
+}
+
+fn serial_init() {
+    // Disable interrupts while programming the divisor and line format.
+    io_outb(_serial_port((u16)SERIAL_INTERRUPT_ENABLE), (u8)0);
+    io_outb(_serial_port((u16)SERIAL_LINE_CONTROL), (u8)SERIAL_LCR_DLAB);
+    io_outb(_serial_port((u16)SERIAL_DATA), (u8)0x03); // 38400 baud divisor low byte
+    io_outb(_serial_port((u16)SERIAL_INTERRUPT_ENABLE), (u8)0x00);
+    io_outb(_serial_port((u16)SERIAL_LINE_CONTROL), (u8)SERIAL_LCR_8N1);
+    io_outb(_serial_port((u16)SERIAL_FIFO_CONTROL), (u8)SERIAL_FIFO_ENABLE);
+    io_outb(_serial_port((u16)SERIAL_MODEM_CONTROL), (u8)SERIAL_MODEM_READY);
+    _serial_initialized = true;
+}
+
+fn serial_putc(ch: u8) {
+    if !_serial_initialized {
+        serial_init();
+    }
+
+    // Wait for the transmitter holding register to become empty.  The UART
+    // is intentionally polled for the MVP; interrupts arrive in a later
+    // task and can reuse this API without changing callers.
+    while (io_inb(_serial_port((u16)SERIAL_LINE_STATUS)) & (u8)SERIAL_LSR_TX_EMPTY) == 0 {
+    }
+    io_outb(_serial_port((u16)SERIAL_DATA), ch);
+}
+
+fn serial_write(text: const char*) {
+    if text == NULL {
+        return;
+    }
+
+    let index: usize = 0;
+    while text[index] != 0 {
+        serial_putc((u8)text[index]);
+        index = index + 1;
+    }
+}
