@@ -9,6 +9,8 @@
 def KEYBOARD_DATA_PORT: u16 = 0x60;
 def KEYBOARD_STATUS_PORT: u16 = 0x64;
 def PIC_MASTER_DATA_PORT: u16 = 0x21;
+def PIC_MASTER_COMMAND_PORT: u16 = 0x20;
+def PIC_END_OF_INTERRUPT: u8 = 0x20;
 def KEYBOARD_IRQ_MASK: u8 = 0x02;
 def KEYBOARD_STATUS_OUTPUT_FULL: u8 = 0x01;
 def KEYBOARD_BREAK_MASK: u8 = 0x80;
@@ -61,6 +63,19 @@ fn keyboard_has_data() -> u8 {
 @link_name("keyboard_read_scancode")
 fn keyboard_read_scancode() -> u8 {
     return io_inb(KEYBOARD_DATA_PORT);
+}
+
+// Consume one IRQ1 byte, translate it, and release the master PIC's
+// in-service bit.  Keep this wrapper separate from keyboard_handle_scancode:
+// the latter is a pure stateful translator and remains useful for tests or a
+// polling caller that owns EOI policy.  EOI is sent even for a modifier,
+// release, or unsupported key so one bad scancode cannot block later input.
+@link_name("keyboard_handle_irq")
+fn keyboard_handle_irq() -> u8 {
+    let scancode: u8 = keyboard_read_scancode();
+    let ch: u8 = keyboard_handle_scancode(scancode);
+    io_outb(PIC_MASTER_COMMAND_PORT, PIC_END_OF_INTERRUPT);
+    return ch;
 }
 
 fn _keyboard_letter(scancode: u8) -> u8 {

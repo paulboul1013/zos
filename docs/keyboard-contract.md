@@ -24,6 +24,9 @@ port `0x60`.
   `0` when no byte is ready or the scancode has no ASCII representation.
 - `keyboard_handle_scancode(scancode: u8) -> u8` translates one set-1 byte and
   is the preferred entry point for an IRQ dispatcher or deterministic test.
+- `keyboard_handle_irq() -> u8` reads one IRQ1 scancode, delegates translation
+  to `keyboard_handle_scancode()`, sends master-PIC EOI `0x20` to command port
+  `0x20`, and returns the translated byte (or `0`).
 
 Return bytes are ASCII: letters (`a`–`z`, or `A`–`Z` with Shift), number-row
 digits (`0`–`9`, or `!@#$%^&*()` with Shift), space, newline for Enter, and
@@ -38,7 +41,8 @@ the modifier state and should be called during kernel input initialization.
 
 ## Integration obligations
 
-The interrupt agent should call `keyboard_handle_scancode()` for IRQ1 after
-reading port `0x60`, then pass a non-zero byte to the shell's
-`shell_feed_char(u8)` contract.  The shell owns echoing and command buffering;
-this driver intentionally does not call `console_putc()`.
+The interrupt agent should call `keyboard_handle_irq()` for IRQ1, then pass a
+non-zero byte to the shell's `shell_feed_char(u8)` contract.  The wrapper owns
+the master-PIC EOI; callers must not duplicate that write.  The shell owns
+echoing and command buffering; this driver intentionally does not call
+`console_putc()`.
