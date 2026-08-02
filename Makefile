@@ -14,10 +14,13 @@ KERNEL_C := $(BUILD)/kernel.c
 KERNEL_O := $(BUILD)/kernel.o
 BOOT_O := $(BUILD)/boot.o
 KERNEL_ELF := $(BUILD)/zenc-os.elf
+INTERRUPTS_S := arch/i686/interrupts.S
+INTERRUPTS_O := $(BUILD)/interrupts.o
 
 # Module sources are compiled as separate freestanding translation units so
 # each agent can own one .zc file without relying on hosted imports.
-MODULE_ZC := arch/i686/io.zc kernel/console.zc kernel/serial.zc
+MODULE_ZC := arch/i686/io.zc kernel/console.zc kernel/serial.zc \
+	kernel/interrupts.zc kernel/memory.zc
 MODULE_C := $(patsubst %.zc,$(BUILD)/%.c,$(MODULE_ZC))
 MODULE_O := $(patsubst %.zc,$(BUILD)/%.o,$(MODULE_ZC))
 
@@ -31,7 +34,7 @@ CFLAGS := -std=gnu11 -m32 -ffreestanding -fno-pie -fno-pic \
 ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic -fno-stack-protector
 LDFLAGS := -T arch/i686/linker.ld -nostdlib -ffreestanding -fno-pie -m32
 
-.PHONY: all check-tools transpile check-abi test-console test boot.o kernel clean
+.PHONY: all check-tools transpile check-abi test-console test-interrupt-memory test boot.o kernel clean
 
 all: kernel
 
@@ -75,8 +78,11 @@ check-abi: $(KERNEL_O)
 $(BOOT_O): arch/i686/boot.S arch/i686/linker.ld | $(BUILD)
 	$(CC) $(ASFLAGS) -c arch/i686/boot.S -o $@
 
-kernel: check-abi $(BOOT_O) $(MODULE_O) arch/i686/linker.ld
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(KERNEL_ELF) $(BOOT_O) $(KERNEL_O) $(MODULE_O) -lgcc
+$(INTERRUPTS_O): $(INTERRUPTS_S) | $(BUILD)
+	$(CC) $(ASFLAGS) -c $(INTERRUPTS_S) -o $@
+
+kernel: check-abi $(BOOT_O) $(INTERRUPTS_O) $(MODULE_O) arch/i686/linker.ld
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $(KERNEL_ELF) $(BOOT_O) $(INTERRUPTS_O) $(KERNEL_O) $(MODULE_O) -lgcc
 	@set -eu; \
 	$(NM) -n $(KERNEL_ELF) | awk '$$3 == "_start" { start = 1 } $$3 == "kernel_main" { main = 1 } END { if (!start || !main) exit 1 }'; \
 	if $(NM) -u $(KERNEL_ELF) | grep -q .; then \
@@ -89,7 +95,10 @@ kernel: check-abi $(BOOT_O) $(MODULE_O) arch/i686/linker.ld
 test-console: transpile
 	./tests/console_io_smoke.sh
 
-test: kernel test-console
+test-interrupt-memory: transpile
+	./tests/interrupt_memory_static.sh
+
+test: kernel test-console test-interrupt-memory
 	./tests/boot_test.sh
 
 boot.o: $(BOOT_O)

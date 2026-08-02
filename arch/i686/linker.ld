@@ -35,6 +35,10 @@ SECTIONS
     __stack_bottom = stack_bottom;
     __stack_top = stack_top;
 
+    /* A bounded identity-mapped arena for the first bump allocator. */
+    __heap_start = ALIGN(__kernel_end, 16);
+    __heap_end = __heap_start + 0x10000;
+
     /DISCARD/ :
     {
         *(.comment)
