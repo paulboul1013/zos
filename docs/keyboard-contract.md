@@ -4,6 +4,17 @@
 does not install an IRQ handler and does not write to the console; those
 responsibilities belong to the interrupt and shell/console tasks.
 
+## Initialization
+
+`keyboard_init()` is the keyboard module's hardware initialization entry
+point.  It clears the Shift state, reads the current master PIC data-port mask
+at `0x21`, and writes back `mask & ~0x02`.  This unmasks only IRQ1 while
+preserving all other master-PIC lines, including IRQ0 for the timer.  IDT gate
+installation and global interrupt enable remain owned by the interrupt and
+kernel integration code.  The function uses the shared `io_inb`/`io_outb`
+port-I/O boundary and does not consume a pending byte from controller data
+port `0x60`.
+
 ## Input and output
 
 - `keyboard_has_data() -> u8` reads controller status port `0x64` and returns

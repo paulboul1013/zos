@@ -8,6 +8,8 @@
 
 def KEYBOARD_DATA_PORT: u16 = 0x60;
 def KEYBOARD_STATUS_PORT: u16 = 0x64;
+def PIC_MASTER_DATA_PORT: u16 = 0x21;
+def KEYBOARD_IRQ_MASK: u8 = 0x02;
 def KEYBOARD_STATUS_OUTPUT_FULL: u8 = 0x01;
 def KEYBOARD_BREAK_MASK: u8 = 0x80;
 def KEYBOARD_LEFT_SHIFT: u8 = 0x2a;
@@ -24,12 +26,24 @@ def KEY_EVENT_BACKSPACE: u8 = (u8)'\b';
 // Defined by arch/i686/io.zc.  Keep the port-I/O boundary explicit so this
 // module can be transpiled and syntax-checked as an independent work slice.
 extern fn io_inb(port: u16) -> u8;
+extern fn io_outb(port: u16, value: u8);
 
 let _keyboard_shift: u8 = 0;
 
 @link_name("keyboard_reset")
 fn keyboard_reset() {
     _keyboard_shift = 0;
+}
+
+// Initialize the keyboard-facing part of the PIC contract.  Preserve every
+// existing master-PIC mask bit and clear only IRQ1 (the PS/2 keyboard line).
+// IRQ0 remains untouched so timer setup can own its enable policy.  IDT gate
+// installation and STI are intentionally owned by interrupts/kernel code.
+@link_name("keyboard_init")
+fn keyboard_init() {
+    keyboard_reset();
+    let master_mask: u8 = io_inb(PIC_MASTER_DATA_PORT);
+    io_outb(PIC_MASTER_DATA_PORT, master_mask & ~KEYBOARD_IRQ_MASK);
 }
 
 @link_name("keyboard_shift_active")
