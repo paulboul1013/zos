@@ -43,32 +43,13 @@ make ZC=/path/to/zc \
      kernel
 ```
 
-## 可重現的指令
+## 編譯與執行
 
 ```sh
-make check-tools
-make transpile
-make check-abi
-make kernel
-make iso
-make qemu
-make test
+make
 ```
 
-`make test` 會對每個模組執行獨立轉譯與物件檔檢查、使用 QEMU 直接啟動
-ELF、建立 GRUB ISO，並使用 QEMU 啟動該 ISO。ISO 測試需要四個執行期標記：
-`Zenc OS booted`、`keyboard: ready`、`shell: ready` 與 `timer: ok`。
-
-手動執行方式：
-
+執行
 ```sh
 make qemu
-```
-
-`make qemu` 會先自動建立 ISO、開啟 QEMU 視窗，並將序列輸出連接到終端機。
-在 QEMU 視窗的 `zos>` 提示字元輸入 `clear`。`help`、`about` 與 `ticks` 等
-資訊查詢指令並未內建。若要以無頭模式只使用序列輸出執行：
-
-```sh
-make qemu QEMU_FLAGS='-serial stdio -display none -monitor none'
 ```
