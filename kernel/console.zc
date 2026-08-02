@@ -6,6 +6,10 @@
 
 def CONSOLE_COLUMNS: u16 = 80;
 def CONSOLE_ROWS: u16 = 25;
+def CONSOLE_CRTC_INDEX_PORT: u16 = 0x3D4;
+def CONSOLE_CRTC_DATA_PORT: u16 = 0x3D5;
+def CONSOLE_CURSOR_HIGH: u8 = 0x0E;
+def CONSOLE_CURSOR_LOW: u8 = 0x0F;
 
 raw {
     static volatile uint16_t* const _zos_vga_text =
@@ -25,6 +29,7 @@ raw {
 
 extern fn _zos_vga_write_cell(index: u32, value: u16);
 extern fn _zos_vga_fill(value: u16);
+extern fn io_outb(port: u16, value: u8);
 
 let _console_column: u16 = 0;
 let _console_row: u16 = 0;
@@ -32,6 +37,19 @@ let _console_color: u8 = 0x07;
 
 fn _console_cell(ch: u8) -> u16 {
     return ((u16)_console_color << 8) | (u16)ch;
+}
+
+// Keep the VGA hardware cursor aligned with the logical console position.
+// VGA CRTC register 0x0E/0x0F stores a character-cell offset in the 80x25
+// text buffer, so the shell prompt `zos> ` leaves the cursor at column 5.
+fn _console_set_cursor() {
+    let position: u32 = (u32)_console_row * (u32)CONSOLE_COLUMNS +
+                        (u32)_console_column;
+
+    io_outb((u16)CONSOLE_CRTC_INDEX_PORT, (u8)CONSOLE_CURSOR_LOW);
+    io_outb((u16)CONSOLE_CRTC_DATA_PORT, (u8)(position & 0xFF));
+    io_outb((u16)CONSOLE_CRTC_INDEX_PORT, (u8)CONSOLE_CURSOR_HIGH);
+    io_outb((u16)CONSOLE_CRTC_DATA_PORT, (u8)((position >> 8) & 0xFF));
 }
 
 fn _console_redraw_cursor() {
@@ -48,6 +66,7 @@ fn console_clear() {
     _zos_vga_fill(_console_cell((u8)' '));
     _console_column = (u16)0;
     _console_row = (u16)0;
+    _console_set_cursor();
 }
 
 fn console_init() {
@@ -81,6 +100,8 @@ fn console_putc(ch: u8) {
     // writes past the 80x25 VGA window.
     if _console_row >= CONSOLE_ROWS {
         console_clear();
+    } else {
+        _console_set_cursor();
     }
 }
 
