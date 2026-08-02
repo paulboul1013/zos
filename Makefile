@@ -8,6 +8,8 @@ LD := $(CROSS_PREFIX)ld
 NM := $(CROSS_PREFIX)nm
 GRUB_FILE ?= grub-file
 GRUB_MKRESCUE ?= grub-mkrescue
+QEMU ?= qemu-system-i386
+QEMU_FLAGS ?= -serial stdio
 
 BUILD := build
 KERNEL_ZC := kernel/kernel.zc
@@ -40,7 +42,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic -fno-stack-protector
 LDFLAGS := -T arch/i686/linker.ld -nostdlib -ffreestanding -fno-pie -m32
 
 .PHONY: all check-tools transpile check-abi test-console test-interrupt-memory \
-	test-timer test-keyboard test-shell iso test-iso test boot.o kernel clean
+	test-timer test-keyboard test-shell iso qemu test-iso test boot.o kernel clean
 
 all: kernel
 
@@ -105,6 +107,13 @@ iso: kernel | $(BUILD)
 	$(GRUB_MKRESCUE) -o $(ISO_IMAGE) $(ISO_ROOT)
 	$(GRUB_FILE) --is-x86-multiboot $(ISO_KERNEL)
 	@echo "built GRUB ISO: $(ISO_IMAGE)"
+
+# Launch the official GRUB ISO in an interactive QEMU window.  Override
+# QEMU_FLAGS for headless runs, for example:
+#   make qemu QEMU_FLAGS='-serial stdio -display none -monitor none'
+qemu: iso
+	@command -v "$(QEMU)" >/dev/null || { echo "missing executable: $(QEMU)" >&2; exit 1; }
+	$(QEMU) -cdrom $(ISO_IMAGE) $(QEMU_FLAGS)
 
 test-console: transpile
 	./tests/console_io_smoke.sh

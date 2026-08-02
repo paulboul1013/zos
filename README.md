@@ -47,6 +47,7 @@ make transpile
 make check-abi
 make kernel
 make iso
+make qemu
 make test
 ```
 
@@ -58,8 +59,13 @@ The ISO test requires all four runtime markers: `Zenc OS booted`,
 For a manual run:
 
 ```sh
-qemu-system-i386 -cdrom build/zenc-os.iso -serial stdio -display none -monitor none
+make qemu
 ```
 
-Type `help` at the `zos>` prompt through a QEMU keyboard/monitor setup to
-exercise the shell path.
+`make qemu` automatically builds the ISO first, opens the QEMU window, and
+connects serial output to the terminal. Type `help` at the `zos>` prompt in
+the QEMU window. For a headless serial-only run:
+
+```sh
+make qemu QEMU_FLAGS='-serial stdio -display none -monitor none'
+```
