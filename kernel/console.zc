@@ -12,8 +12,13 @@ def CONSOLE_CURSOR_HIGH: u8 = 0x0E;
 def CONSOLE_CURSOR_LOW: u8 = 0x0F;
 
 raw {
+#ifdef ZOS_VGA_TEST
+    extern uint16_t _zos_vga_test_text[2000];
+    static volatile uint16_t* const _zos_vga_text = _zos_vga_test_text;
+#else
     static volatile uint16_t* const _zos_vga_text =
         (volatile uint16_t*)0xB8000;
+#endif
 
     static void _zos_vga_write_cell(uint32_t index, uint16_t value) {
         _zos_vga_text[index] = value;
@@ -25,10 +30,21 @@ raw {
             _zos_vga_text[i] = value;
         }
     }
+
+    static void _zos_vga_scroll_up(uint16_t blank) {
+        uint32_t i;
+        for (i = 0; i < 1920U; ++i) {
+            _zos_vga_text[i] = _zos_vga_text[i + 80U];
+        }
+        for (i = 1920U; i < 2000U; ++i) {
+            _zos_vga_text[i] = blank;
+        }
+    }
 }
 
 extern fn _zos_vga_write_cell(index: u32, value: u16);
 extern fn _zos_vga_fill(value: u16);
+extern fn _zos_vga_scroll_up(blank: u16);
 extern fn io_outb(port: u16, value: u8);
 
 let _console_column: u16 = 0;
@@ -58,6 +74,15 @@ fn _console_redraw_cursor() {
     _zos_vga_write_cell(index, _console_cell((u8)' '));
 }
 
+// Preserve the latest 24 rows when output advances beyond the bottom of the
+// 80x25 text window, then continue writing on the cleared final row.
+fn _console_scroll() {
+    if _console_row >= CONSOLE_ROWS {
+        _zos_vga_scroll_up(_console_cell((u8)' '));
+        _console_row = (u16)((u32)CONSOLE_ROWS - 1);
+    }
+}
+
 fn console_set_color(color: u8) {
     _console_color = color;
 }
@@ -83,6 +108,10 @@ fn console_putc(ch: u8) {
         if _console_column > 0 {
             _console_column = _console_column - 1;
             _console_redraw_cursor();
+        } else if _console_row > 0 {
+            _console_row = _console_row - 1;
+            _console_column = (u16)((u32)CONSOLE_COLUMNS - 1);
+            _console_redraw_cursor();
         }
     } else {
         let index: u32 = (u32)_console_row * (u32)CONSOLE_COLUMNS +
@@ -95,14 +124,8 @@ fn console_putc(ch: u8) {
         }
     }
 
-    // This intentionally uses a full clear instead of scrolling a buffer.
-    // It keeps the first console slice deterministic while still preventing
-    // writes past the 80x25 VGA window.
-    if _console_row >= CONSOLE_ROWS {
-        console_clear();
-    } else {
-        _console_set_cursor();
-    }
+    _console_scroll();
+    _console_set_cursor();
 }
 
 fn console_write(text: const char*) {

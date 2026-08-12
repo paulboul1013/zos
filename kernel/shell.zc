@@ -5,7 +5,10 @@
 // code calls `shell_feed_char` for each byte; command execution stays here so
 // the keyboard and interrupt slices do not need to know shell details.
 
-def SHELL_BUFFER_CAPACITY: u32 = 64;
+// A command may span more than one complete 80x25 VGA screen. The console
+// handles visual wrapping and scrolling while this buffer preserves input
+// for command dispatch and Backspace handling.
+def SHELL_BUFFER_CAPACITY: u32 = 4096;
 
 extern fn console_putc(ch: u8);
 extern fn console_write(text: const char*);
@@ -13,7 +16,7 @@ extern fn console_clear();
 
 // Keep one byte for the terminating zero.  The buffer is only compared by
 // this module; it does not rely on libc string functions or hosted stdlib.
-let _shell_buffer: u8[64];
+let _shell_buffer: u8[4096];
 let _shell_length: u32 = 0;
 
 fn _shell_reset_buffer() {

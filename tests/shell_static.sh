@@ -23,7 +23,7 @@ object="$out_dir/shell.o"
 
 grep -q 'shell_init' "$repo_root/kernel/shell.zc"
 grep -q 'shell_feed_char' "$repo_root/kernel/shell.zc"
-grep -q 'SHELL_BUFFER_CAPACITY: u32 = 64' "$repo_root/kernel/shell.zc"
+grep -q 'SHELL_BUFFER_CAPACITY: u32 = 4096' "$repo_root/kernel/shell.zc"
 grep -q 'console_clear' "$repo_root/kernel/shell.zc"
 grep -q 'unknown command' "$repo_root/kernel/shell.zc"
 ! grep -q 'timer_ticks' "$repo_root/kernel/shell.zc"
@@ -54,7 +54,7 @@ fi
 extern void shell_init(void);
 extern void shell_feed_char(uint8_t ch);
 
-static char log_buffer[4096];
+static char log_buffer[16384];
 static size_t log_length;
 static unsigned clear_calls;
 
@@ -87,6 +87,13 @@ static void feed(const char *text) {
     }
 }
 
+static void feed_repeated(char ch, size_t count) {
+    size_t index;
+    for (index = 0; index < count; ++index) {
+        shell_feed_char((uint8_t)ch);
+    }
+}
+
 int main(void) {
     log_reset();
     shell_init();
@@ -110,6 +117,13 @@ int main(void) {
     log_reset();
     shell_init();
     feed("ticks\n");
+    assert(strstr(log_buffer, "unknown command\n") != NULL);
+
+    log_reset();
+    shell_init();
+    feed_repeated('x', 2100);
+    assert(log_length == 2105);
+    feed("\n");
     assert(strstr(log_buffer, "unknown command\n") != NULL);
 
     log_reset();

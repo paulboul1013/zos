@@ -15,12 +15,13 @@ void shell_feed_char(uint8_t ch);
 `shell_init` clears the fixed command buffer and writes the `zos> ` prompt.
 `shell_feed_char` accepts printable ASCII, newline/CR, and backspace:
 
-- Printable bytes are echoed and appended up to 63 bytes.
+- Printable bytes are echoed and appended up to 4095 bytes. The VGA console
+  wraps at column 80 and scrolls upward after the final row.
 - Backspace removes one byte and emits a console backspace.
 - Enter executes the current command, resets the buffer, and writes a prompt.
 - Bytes outside this set are ignored.
 
-The command buffer is intentionally fixed at 64 bytes and does not allocate
+The command buffer is intentionally fixed at 4096 bytes and does not allocate
 or call hosted C library code.
 
 ## Commands
