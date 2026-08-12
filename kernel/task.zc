@@ -1,0 +1,128 @@
+// ZOS cooperative Ring 0 task scheduler.
+//
+// Task 0 is the already-running boot context. Slots 1..3 own static 4 KiB
+// stacks. Registers and EFLAGS live in each task's saved stack frame, so the
+// scheduler only needs the saved ESP and lifecycle state for each task.
+
+def TASK_MAX: u32 = 4;
+def TASK_STACK_SIZE: u32 = 4096;
+def TASK_INVALID_ID: u32 = (u32)0xFFFFFFFF;
+
+def TASK_UNUSED: u8 = (u8)0;
+def TASK_READY: u8 = (u8)1;
+def TASK_RUNNING: u8 = (u8)2;
+def TASK_TERMINATED: u8 = (u8)3;
+
+extern fn _zos_task_prepare_stack(base: u8*, size: u32,
+                                  entry: fn*()) -> u32;
+extern fn _zos_task_context_switch(old_sp: u32*, new_sp: u32);
+
+// Task 0 uses boot.S's existing stack; only the three created tasks need
+// storage here. Keeping stacks static makes lifetime and ownership explicit.
+let _task_stacks: u8[12288];
+let _task_saved_sp: u32[4];
+let _task_states: u8[4];
+let _task_current_id: u32 = 0;
+let _task_created_count: u32 = 0;
+let _task_next_id: u32 = 1;
+let _task_initialized: bool = false;
+
+fn _task_find_next() -> u32 {
+    let offset: u32 = 1;
+
+    while offset < TASK_MAX {
+        let candidate: u32 = (_task_current_id + offset) % TASK_MAX;
+        if _task_states[candidate] == TASK_READY {
+            return candidate;
+        }
+        offset = offset + 1;
+    }
+
+    return TASK_INVALID_ID;
+}
+
+fn task_init() {
+    let id: u32 = 0;
+    while id < TASK_MAX {
+        _task_saved_sp[id] = 0;
+        _task_states[id] = TASK_UNUSED;
+        id = id + 1;
+    }
+
+    _task_current_id = 0;
+    _task_created_count = 1;
+    _task_next_id = 1;
+    _task_states[0] = TASK_RUNNING;
+    _task_initialized = true;
+}
+
+fn task_create(entry: fn*()) -> u32 {
+    if !_task_initialized || entry == NULL || _task_next_id >= TASK_MAX {
+        return TASK_INVALID_ID;
+    }
+
+    let id: u32 = _task_next_id;
+    let stack_offset: u32 = (id - 1) * TASK_STACK_SIZE;
+    let saved_sp: u32 = _zos_task_prepare_stack(
+        &_task_stacks[stack_offset], TASK_STACK_SIZE, entry
+    );
+    if saved_sp == 0 {
+        return TASK_INVALID_ID;
+    }
+
+    _task_saved_sp[id] = saved_sp;
+    _task_states[id] = TASK_READY;
+    _task_next_id = id + 1;
+    _task_created_count = _task_created_count + 1;
+    return id;
+}
+
+fn task_yield() {
+    if !_task_initialized {
+        return;
+    }
+
+    let previous: u32 = _task_current_id;
+    let next: u32 = _task_find_next();
+    if next == TASK_INVALID_ID {
+        return;
+    }
+
+    if _task_states[previous] == TASK_RUNNING {
+        _task_states[previous] = TASK_READY;
+    }
+    _task_states[next] = TASK_RUNNING;
+    _task_current_id = next;
+
+    _zos_task_context_switch(&_task_saved_sp[previous],
+                             _task_saved_sp[next]);
+}
+
+fn task_current() -> u32 {
+    return _task_current_id;
+}
+
+fn task_count() -> u32 {
+    return _task_created_count;
+}
+
+fn task_state(id: u32) -> u8 {
+    if id >= TASK_MAX {
+        return TASK_UNUSED;
+    }
+    return _task_states[id];
+}
+
+// A task entry function returns into the assembly exit trampoline, which
+// calls this function with normal cdecl stack alignment. A terminated task is
+// never READY again, so yielding here cannot resume this context.
+fn _task_exit() {
+    _task_states[_task_current_id] = TASK_TERMINATED;
+    task_yield();
+
+    while true {
+        asm volatile {
+            "hlt"
+        }
+    }
+}

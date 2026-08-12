@@ -10,6 +10,7 @@ markers=(
     "keyboard: ready"
     "shell: ready"
     "timer: ok"
+    "tasks: done"
 )
 
 if [[ ! -f "$iso_image" ]]; then

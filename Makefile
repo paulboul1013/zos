@@ -30,12 +30,14 @@ ISO_KERNEL := $(ISO_ROOT)/boot/zenc-os.elf
 ISO_IMAGE := $(BUILD)/zenc-os.iso
 INTERRUPTS_S := arch/i686/interrupts.S
 INTERRUPTS_O := $(BUILD)/interrupts.o
+TASKS_S := arch/i686/tasks.S
+TASKS_O := $(BUILD)/tasks.o
 
 # Module sources are compiled as separate freestanding translation units so
 # each agent can own one .zc file without relying on hosted imports.
 MODULE_ZC := arch/i686/io.zc kernel/console.zc kernel/serial.zc \
 	kernel/interrupts.zc kernel/memory.zc kernel/timer.zc kernel/keyboard.zc \
-	kernel/shell.zc
+	kernel/shell.zc kernel/task.zc
 MODULE_C := $(patsubst %.zc,$(BUILD)/%.c,$(MODULE_ZC))
 MODULE_O := $(patsubst %.zc,$(BUILD)/%.o,$(MODULE_ZC))
 
@@ -50,7 +52,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic -fno-stack-protector
 LDFLAGS := -T arch/i686/linker.ld -nostdlib -ffreestanding -fno-pie -m32
 
 .PHONY: all check-tools check-abi test-toolchain test-console test-interrupt-memory \
-	test-timer test-keyboard test-shell iso qemu test-iso test boot.o kernel clean
+	test-timer test-keyboard test-shell test-task iso qemu test-iso test boot.o kernel clean
 
 all: kernel
 
@@ -83,12 +85,12 @@ $(BUILD)/%.o: $(BUILD)/%.c
 check-abi: $(KERNEL_O)
 	@set -eu; \
 	$(NM) -g --defined-only $(KERNEL_O) | awk '$$3 == "kernel_main" { found = 1 } END { exit !found }'; \
-	unexpected=$$($(NM) -u $(KERNEL_O) | awk '$$2 !~ /^(console_init|console_write|serial_init|serial_write|zos_memory_init|interrupts_init|zos_interrupts_enable|timer_init|keyboard_init|shell_init|__kernel_end|__heap_end)$$/'); \
+	unexpected=$$($(NM) -u $(KERNEL_O) | awk '$$2 !~ /^(console_init|console_write|serial_init|serial_write|zos_memory_init|interrupts_init|zos_interrupts_enable|timer_init|keyboard_init|shell_init|task_init|task_create|task_yield|__kernel_end|__heap_end)$$/'); \
 	if [ -n "$$unexpected" ]; then \
 		echo "unexpected unresolved symbols in $(KERNEL_O):" >&2; \
 		echo "$$unexpected" >&2; exit 1; \
 	fi
-	@echo "ABI check passed: kernel_main is external; only console/serial module symbols remain unresolved"
+	@echo "ABI check passed: kernel_main is external; only expected module symbols remain unresolved"
 
 $(BOOT_O): arch/i686/boot.S arch/i686/linker.ld | $(BUILD)
 	$(CC) $(ASFLAGS) -c arch/i686/boot.S -o $@
@@ -96,8 +98,11 @@ $(BOOT_O): arch/i686/boot.S arch/i686/linker.ld | $(BUILD)
 $(INTERRUPTS_O): $(INTERRUPTS_S) | $(BUILD)
 	$(CC) $(ASFLAGS) -c $(INTERRUPTS_S) -o $@
 
-kernel: check-abi $(BOOT_O) $(INTERRUPTS_O) $(MODULE_O) arch/i686/linker.ld
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(KERNEL_ELF) $(BOOT_O) $(INTERRUPTS_O) $(KERNEL_O) $(MODULE_O) -lgcc
+$(TASKS_O): $(TASKS_S) | $(BUILD)
+	$(CC) $(ASFLAGS) -c $(TASKS_S) -o $@
+
+kernel: check-abi $(BOOT_O) $(INTERRUPTS_O) $(TASKS_O) $(MODULE_O) arch/i686/linker.ld
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $(KERNEL_ELF) $(BOOT_O) $(INTERRUPTS_O) $(TASKS_O) $(KERNEL_O) $(MODULE_O) -lgcc
 	@set -eu; \
 	$(NM) -n $(KERNEL_ELF) | awk '$$3 == "_start" { start = 1 } $$3 == "kernel_main" { main = 1 } END { if (!start || !main) exit 1 }'; \
 	if $(NM) -u $(KERNEL_ELF) | grep -q .; then \
@@ -136,13 +141,17 @@ test-keyboard:
 test-shell:
 	./tests/shell_static.sh
 
+test-task: kernel
+	./tests/task_static.sh
+	./tests/task_boot_test.sh
+
 test-toolchain:
 	./tests/make_toolchain_discovery.sh
 
 test-iso: iso
 	./tests/iso_test.sh
 
-test: kernel test-toolchain test-console test-interrupt-memory test-timer test-keyboard test-shell test-iso
+test: kernel test-toolchain test-console test-interrupt-memory test-timer test-keyboard test-shell test-task test-iso
 	./tests/boot_test.sh
 
 boot.o: $(BOOT_O)

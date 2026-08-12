@@ -13,6 +13,9 @@ extern fn timer_init(hz: U32);
 extern fn keyboard_init();
 extern fn shell_init();
 extern fn zos_interrupts_enable();
+extern fn task_init();
+extern fn task_create(entry: fn*()) -> U32;
+extern fn task_yield();
 
 raw {
     extern char __kernel_end;
@@ -30,6 +33,18 @@ raw {
 extern fn _zos_kernel_heap_start() -> U32;
 extern fn _zos_kernel_heap_end() -> U32;
 
+fn _task_demo_a() {
+    serial_write("task A1\n");
+    task_yield();
+    serial_write("task A2\n");
+}
+
+fn _task_demo_b() {
+    serial_write("task B1\n");
+    task_yield();
+    serial_write("task B2\n");
+}
+
 fn kernel_main() {
     console_init();
     serial_init();
@@ -43,9 +58,22 @@ fn kernel_main() {
     timer_init((U32)100);
     keyboard_init();
     shell_init();
+    task_init();
+    let task_a: U32 = task_create(_task_demo_a);
+    let task_b: U32 = task_create(_task_demo_b);
     serial_write("keyboard: ready\n");
     serial_write("shell: ready\n");
     zos_interrupts_enable();
+
+    if task_a != (U32)0xffffffff && task_b != (U32)0xffffffff {
+        // First round: boot -> A1 -> B1 -> boot.
+        task_yield();
+        // Second round: boot -> A2/exit -> B2/exit -> boot.
+        task_yield();
+        serial_write("tasks: done\n");
+    } else {
+        serial_write("tasks: create failed\n");
+    }
 
     // Keep IF enabled so PIT/PS2 IRQs can wake this idle loop.  The kernel
     // never returns to the boot stub after device initialization.
