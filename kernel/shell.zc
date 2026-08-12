@@ -1,9 +1,9 @@
 // ZOS keyboard shell (Task 10).
 //
 // The shell is deliberately small and freestanding.  It owns one fixed-size
-// command buffer and consumes ASCII bytes produced by keyboard.zc.  Device
-// code calls `shell_feed_char` for each byte; command execution stays here so
-// the keyboard and interrupt slices do not need to know shell details.
+// command buffer and consumes ASCII bytes produced by keyboard.zc. The shell
+// task calls `shell_feed_char` outside interrupt context; command execution
+// stays here so keyboard and interrupt code do not know shell policy.
 
 // A command may span more than one complete 80x25 VGA screen. The console
 // handles visual wrapping and scrolling while this buffer preserves input
@@ -13,6 +13,8 @@ def SHELL_BUFFER_CAPACITY: u32 = 4096;
 extern fn console_putc(ch: u8);
 extern fn console_write(text: const char*);
 extern fn console_clear();
+extern fn keyboard_queue_pop() -> u8;
+extern fn task_yield();
 
 // Keep one byte for the terminating zero.  The buffer is only compared by
 // this module; it does not rely on libc string functions or hosted stdlib.
@@ -96,4 +98,19 @@ fn shell_feed_char(ch: u8) {
     _shell_length = _shell_length + 1;
     _shell_buffer[_shell_length] = (u8)0;
     console_putc(ch);
+}
+
+// Long-lived Ring 0 consumer for the keyboard IRQ queue. It drains queued
+// input in FIFO order and cooperatively yields whenever no input is pending.
+fn shell_task() {
+    shell_init();
+
+    while true {
+        let ch: u8 = keyboard_queue_pop();
+        if ch == (u8)0 {
+            task_yield();
+        } else {
+            shell_feed_char(ch);
+        }
+    }
 }

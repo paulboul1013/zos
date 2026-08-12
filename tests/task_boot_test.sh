@@ -34,17 +34,10 @@ if [[ "$qemu_status" -ne 0 && "$qemu_status" -ne 124 ]]; then
     exit 1
 fi
 
-if ! awk '
-    /task A1/ && state == 0 { state = 1; next }
-    /task B1/ && state == 1 { state = 2; next }
-    /task A2/ && state == 2 { state = 3; next }
-    /task B2/ && state == 3 { state = 4; next }
-    /tasks: done/ && state == 4 { state = 5; next }
-    END { exit state == 5 ? 0 : 1 }
-' "$output"; then
-    echo "task boot test: cooperative task marker order not found" >&2
+if ! grep -Fq "shell task: running" "$output"; then
+    echo "task boot test: shell task did not yield back to boot task" >&2
     sed -n '1,160p' "$output" >&2
     exit 1
 fi
 
-echo "task boot test: PASS (A1 -> B1 -> A2 -> B2 -> done)"
+echo "task boot test: PASS (shell task entered and yielded to boot task)"

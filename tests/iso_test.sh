@@ -8,9 +8,9 @@ timeout_s=${QEMU_TIMEOUT:-6}
 markers=(
     "${BOOT_MARKER:-Zenc OS booted}"
     "keyboard: ready"
-    "shell: ready"
+    "shell task: ready"
+    "shell task: running"
     "timer: ok"
-    "tasks: done"
 )
 
 if [[ ! -f "$iso_image" ]]; then

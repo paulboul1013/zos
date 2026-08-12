@@ -8,8 +8,8 @@
 只有在 task 呼叫 `task_yield()` 時才會切換；PIT IRQ0 仍只作為時脈來源，
 不會搶佔正在執行的 task。
 
-當兩個示範 task 能交替輸出 serial 標記、安全返回並進入終止狀態，且
-開機 task 能繼續執行時，即完成第一個里程碑。
+Hosted scheduler model 會驗證多 task Round-Robin 與安全退出；實際 QEMU
+則由常駐 shell task 初始化後 yield 回開機 task，驗證真實 stack switch。
 
 ## 技術堆疊
 
@@ -36,7 +36,7 @@ make qemu
 ```text
 kernel/task.zc          Task table、生命週期與 create/yield/exit 策略
 arch/i686/tasks.S       i686 context switch 實作
-kernel/kernel.zc        兩個有限執行的 serial 示範 task 與開機整合
+kernel/kernel.zc        常駐 shell task 建立與 boot idle loop
 tests/task_static.sh    ABI、初始 stack frame 與 hosted scheduler 檢查
 tests/task_boot_test.sh QEMU 中的 cooperative switch 執行順序檢查
 tests/iso_test.sh       QEMU serial 標記驗證
@@ -103,16 +103,15 @@ saved ESP -> EDI, ESI, EBP, saved-ESP, EBX, EDX, ECX, EAX
 - Cross-object 測試：確認產生的 task 模組是 freestanding i686 程式碼，
   能輸出規格定義的 ABI，且不依賴 hosted runtime。
 - Relocatable assembly link：確認 context-switch symbol 與 task 模組一致。
-- QEMU 整合測試：serial 輸出包含交替的 `task A`、`task B` 步驟與
-  `tasks: done`，證明不同 stack 能正確恢復執行。
+- QEMU 整合測試：serial 輸出包含 `shell task: running`，證明 shell task
+  已使用獨立 stack 執行，並成功 yield 回 boot task。
 - 完整回歸測試：`make test` 必須繼續通過所有既有測試。
 
 ## 範圍界線
 
 - 一定要做：保留既有 IDT/PIC/PIT/keyboard 行為；IRQ0 維持非搶佔式；
   使用 object 與 QEMU 測試驗證 stack-frame offset。
-- 需要先詢問：變更 task 數量、stack 大小、加入搶佔式排程，或在本里程碑
-  將 shell 移出 IRQ context。
+- 需要先詢問：變更 task 數量、stack 大小，或加入搶佔式排程。
 - 絕對不做：從 bump heap 配置 task stack、切換 privilege ring、啟用
   paging，或在此階段於 PIT handler 內執行 scheduler policy。
 
@@ -127,8 +126,8 @@ saved ESP -> EDI, ESI, EBP, saved-ESP, EBX, EDX, ECX, EAX
 - [x] 新增 `arch/i686/tasks.S` 與初始 stack 建構邏輯。
   - 驗收：新 task 能進入指定函式，並在返回時進入 task exit。
   - 驗證：relocatable link 與 QEMU 標記。
-- [x] 將兩個示範 task 整合至開機與建置 target。
-  - 驗收：兩個 task 各自交替執行兩次、正常終止，且開機 task 繼續存活。
+- [x] 將常駐 shell task 整合至開機與建置 target。
+  - 驗收：shell task 使用獨立 stack 初始化並 yield，且開機 task 繼續存活。
   - 驗證：`make test`。
 - [x] 更新 README，說明協作式排程行為與限制。
   - 驗收：文件內容與實際公開 API 一致。
@@ -136,13 +135,14 @@ saved ESP -> EDI, ESI, EBP, saved-ESP, EBX, EDX, ECX, EAX
 
 ## 成功條件
 
-- Task 0 是開機執行環境；至少兩個額外 task 使用不同的 4 KiB stack 執行。
-- Serial 標記證明執行順序為 `A1 -> B1 -> A2 -> B2`。
-- 任一 task 返回時都不會破壞開機 stack 或 return address。
+- Task 0 是開機執行環境；shell task 使用獨立的 4 KiB stack 執行。
+- Serial 的 `shell task: running` 證明 shell 已 yield 回開機 task。
+- Hosted model 驗證多 task Round-Robin、容量與生命週期狀態。
 - 除非程式明確呼叫 `task_yield()`，否則不會發生 task switch。
 - 既有 keyboard、shell、timer、VGA、ISO 與 direct-boot 測試全部通過。
 
 ## 待確認問題
 
-本里程碑沒有待確認問題。搶佔式排程、wait queue、task slot 重複使用、
-user mode，以及將 shell 移至獨立 task，皆刻意延後處理。
+本里程碑沒有待確認問題。搶佔式排程、wait queue、task slot 重複使用與
+user mode 皆刻意延後處理。Shell 移出 IRQ context 的已完成設計與驗證
+記錄在 `docs/shell-task-contract.md`。

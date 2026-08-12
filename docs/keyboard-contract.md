@@ -17,16 +17,14 @@ port `0x60`.
 
 ## Input and output
 
-- `keyboard_has_data() -> u8` reads controller status port `0x64` and returns
-  bit 0 (`1` when port `0x60` has a byte).
 - `keyboard_read_scancode() -> u8` reads one byte from data port `0x60`.
-- `keyboard_poll() -> u8` combines the two calls and returns an ASCII byte, or
-  `0` when no byte is ready or the scancode has no ASCII representation.
 - `keyboard_handle_scancode(scancode: u8) -> u8` translates one set-1 byte and
-  is the preferred entry point for an IRQ dispatcher or deterministic test.
-- `keyboard_handle_irq() -> u8` reads one IRQ1 scancode, delegates translation
-  to `keyboard_handle_scancode()`, sends master-PIC EOI `0x20` to command port
-  `0x20`, and returns the translated byte (or `0`).
+  is the deterministic translation boundary used by the IRQ producer.
+- `keyboard_handle_irq()` reads one IRQ1 scancode, queues non-zero translated
+  ASCII, and sends master-PIC EOI `0x20` to command port `0x20`. EOI is sent
+  even when there is no translated byte or the queue is full.
+- `keyboard_queue_pop() -> u8` lets the Ring 0 shell task consume queued input
+  in FIFO order; `0` means the queue is empty.
 
 Return bytes are ASCII: letters (`a`–`z`, or `A`–`Z` with Shift), number-row
 digits (`0`–`9`, or `!@#$%^&*()` with Shift), space, newline for Enter, and
@@ -41,8 +39,8 @@ the modifier state and should be called during kernel input initialization.
 
 ## Integration obligations
 
-The interrupt agent should call `keyboard_handle_irq()` for IRQ1, then pass a
-non-zero byte to the shell's `shell_feed_char(u8)` contract.  The wrapper owns
-the master-PIC EOI; callers must not duplicate that write.  The shell owns
-echoing and command buffering; this driver intentionally does not call
+The interrupt dispatcher calls `keyboard_handle_irq()` for IRQ1 and does not
+call the shell or console. The Ring 0 shell task drains `keyboard_queue_pop()`
+outside interrupt context. The wrapper owns the master-PIC EOI; callers must
+not duplicate that write. This driver intentionally does not call
 `console_putc()`.

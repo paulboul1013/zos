@@ -23,6 +23,7 @@ object="$out_dir/shell.o"
 
 grep -q 'shell_init' "$repo_root/kernel/shell.zc"
 grep -q 'shell_feed_char' "$repo_root/kernel/shell.zc"
+grep -q 'shell_task' "$repo_root/kernel/shell.zc"
 grep -q 'SHELL_BUFFER_CAPACITY: u32 = 4096' "$repo_root/kernel/shell.zc"
 grep -q 'console_clear' "$repo_root/kernel/shell.zc"
 grep -q 'unknown command' "$repo_root/kernel/shell.zc"
@@ -37,6 +38,7 @@ grep -q 'unknown command' "$repo_root/kernel/shell.zc"
     -c "$generated" -o "$object"
 "$cross_nm" -g --defined-only "$object" | grep -Eq '[[:space:]]shell_init$'
 "$cross_nm" -g --defined-only "$object" | grep -Eq '[[:space:]]shell_feed_char$'
+"$cross_nm" -g --defined-only "$object" | grep -Eq '[[:space:]]shell_task$'
 if "$cross_nm" -u "$object" | grep -Eq '(strcmp|strlen|malloc|free|puts|printf)'; then
     echo "shell static: hosted runtime symbol leaked into shell object" >&2
     exit 1
@@ -47,16 +49,23 @@ fi
 "$host_cc" -std=gnu11 -Wall -Wextra -DZC_FUNC= -DZC_GLOBAL= \
     "$generated" -x c -o "$out_dir/harness" - <<'EOF'
 #include <assert.h>
+#include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 extern void shell_init(void);
 extern void shell_feed_char(uint8_t ch);
+extern void shell_task(void);
 
 static char log_buffer[16384];
 static size_t log_length;
 static unsigned clear_calls;
+static uint8_t queued_input[16];
+static size_t queued_input_length;
+static size_t queued_input_index;
+static unsigned yield_calls;
+static jmp_buf shell_task_escape;
 
 static void log_reset(void) {
     log_length = 0;
@@ -79,6 +88,18 @@ void console_write(const char *text) {
 
 void console_clear(void) {
     clear_calls++;
+}
+
+uint8_t keyboard_queue_pop(void) {
+    if (queued_input_index < queued_input_length) {
+        return queued_input[queued_input_index++];
+    }
+    return 0;
+}
+
+void task_yield(void) {
+    yield_calls++;
+    longjmp(shell_task_escape, 1);
 }
 
 static void feed(const char *text) {
@@ -130,6 +151,19 @@ int main(void) {
     shell_init();
     feed("ab\b\n");
     assert(strstr(log_buffer, "unknown command\n") != NULL);
+
+    log_reset();
+    queued_input[0] = (uint8_t)'a';
+    queued_input[1] = (uint8_t)'b';
+    queued_input_length = 2;
+    queued_input_index = 0;
+    yield_calls = 0;
+    if (setjmp(shell_task_escape) == 0) {
+        shell_task();
+    }
+    assert(yield_calls == 1);
+    assert(queued_input_index == queued_input_length);
+    assert(strcmp(log_buffer, "zos> ab") == 0);
 
     puts("shell harness: PASS");
     return 0;

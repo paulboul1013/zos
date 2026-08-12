@@ -6,22 +6,21 @@
 // and break handling stay here so the interrupt and shell tasks can consume a
 // single byte without duplicating PS/2 protocol details.
 
-def KEYBOARD_DATA_PORT: u16 = 0x60;
-def KEYBOARD_STATUS_PORT: u16 = 0x64;
-def PIC_MASTER_DATA_PORT: u16 = 0x21;
-def PIC_MASTER_COMMAND_PORT: u16 = 0x20;
-def PIC_END_OF_INTERRUPT: u8 = 0x20;
-def KEYBOARD_IRQ_MASK: u8 = 0x02;
-def KEYBOARD_STATUS_OUTPUT_FULL: u8 = 0x01;
-def KEYBOARD_BREAK_MASK: u8 = 0x80;
-def KEYBOARD_LEFT_SHIFT: u8 = 0x2a;
-def KEYBOARD_RIGHT_SHIFT: u8 = 0x36;
-def KEYBOARD_LEFT_SHIFT_BREAK: u8 = 0xaa;
-def KEYBOARD_RIGHT_SHIFT_BREAK: u8 = 0xb6;
+def KEYBOARD_DATA_PORT: u16 = (u16)0x60;
+def PIC_MASTER_DATA_PORT: u16 = (u16)0x21;
+def PIC_MASTER_COMMAND_PORT: u16 = (u16)0x20;
+def PIC_END_OF_INTERRUPT: u8 = (u8)0x20;
+def KEYBOARD_IRQ_MASK: u8 = (u8)0x02;
+def KEYBOARD_BREAK_MASK: u8 = (u8)0x80;
+def KEYBOARD_LEFT_SHIFT: u8 = (u8)0x2a;
+def KEYBOARD_RIGHT_SHIFT: u8 = (u8)0x36;
+def KEYBOARD_LEFT_SHIFT_BREAK: u8 = (u8)0xaa;
+def KEYBOARD_RIGHT_SHIFT_BREAK: u8 = (u8)0xb6;
+def KEYBOARD_QUEUE_CAPACITY: u32 = 64;
 
 // Return values are ASCII bytes.  Zero means that the scancode is a modifier,
 // a key-release event, an unsupported key, or that no byte was available.
-def KEY_EVENT_NONE: u8 = 0;
+def KEY_EVENT_NONE: u8 = (u8)0;
 def KEY_EVENT_ENTER: u8 = (u8)'\n';
 def KEY_EVENT_BACKSPACE: u8 = (u8)'\b';
 
@@ -30,10 +29,17 @@ def KEY_EVENT_BACKSPACE: u8 = (u8)'\b';
 extern fn io_inb(port: u16) -> u8;
 extern fn io_outb(port: u16, value: u8);
 
-let _keyboard_shift: u8 = 0;
+let _keyboard_shift: u8 = (u8)0;
+let _keyboard_queue: u8[64];
+let _keyboard_queue_head: u32 = 0;
+let _keyboard_queue_tail: u32 = 0;
+let _keyboard_queue_drop_count: u32 = 0;
 
 fn keyboard_reset() {
-    _keyboard_shift = 0;
+    _keyboard_shift = (u8)0;
+    _keyboard_queue_head = 0;
+    _keyboard_queue_tail = 0;
+    _keyboard_queue_drop_count = 0;
 }
 
 // Initialize the keyboard-facing part of the PIC contract.  Preserve every
@@ -50,70 +56,87 @@ fn keyboard_shift_active() -> u8 {
     return _keyboard_shift;
 }
 
-// The status register is safe to poll from the interrupt handler or a shell
-// loop.  Bit 0 is set when port 0x60 contains a scancode.
-fn keyboard_has_data() -> u8 {
-    return io_inb(KEYBOARD_STATUS_PORT) & KEYBOARD_STATUS_OUTPUT_FULL;
-}
-
 fn keyboard_read_scancode() -> u8 {
     return io_inb(KEYBOARD_DATA_PORT);
 }
 
-// Consume one IRQ1 byte, translate it, and release the master PIC's
-// in-service bit.  Keep this wrapper separate from keyboard_handle_scancode:
-// the latter is a pure stateful translator and remains useful for tests or a
-// polling caller that owns EOI policy.  EOI is sent even for a modifier,
-// release, or unsupported key so one bad scancode cannot block later input.
-fn keyboard_handle_irq() -> u8 {
-    let scancode: u8 = keyboard_read_scancode();
-    let ch: u8 = keyboard_handle_scancode(scancode);
-    io_outb(PIC_MASTER_COMMAND_PORT, PIC_END_OF_INTERRUPT);
+// IRQ1 is the only producer and the shell task is the only consumer. One
+// storage slot remains empty so equal head/tail values always mean empty.
+// Dropping the newest byte on overflow preserves the order of queued input.
+fn _keyboard_queue_push(ch: u8) {
+    let next: u32 = _keyboard_queue_head + 1;
+    if next >= KEYBOARD_QUEUE_CAPACITY {
+        next = 0;
+    }
+
+    if next == _keyboard_queue_tail {
+        _keyboard_queue_drop_count = _keyboard_queue_drop_count + 1;
+        return;
+    }
+
+    _keyboard_queue[_keyboard_queue_head] = ch;
+    _keyboard_queue_head = next;
+}
+
+fn keyboard_queue_pop() -> u8 {
+    if _keyboard_queue_tail == _keyboard_queue_head {
+        return KEY_EVENT_NONE;
+    }
+
+    let ch: u8 = _keyboard_queue[_keyboard_queue_tail];
+    _keyboard_queue_tail = _keyboard_queue_tail + 1;
+    if _keyboard_queue_tail >= KEYBOARD_QUEUE_CAPACITY {
+        _keyboard_queue_tail = 0;
+    }
     return ch;
 }
 
+fn keyboard_queue_count() -> u32 {
+    if _keyboard_queue_head >= _keyboard_queue_tail {
+        return _keyboard_queue_head - _keyboard_queue_tail;
+    }
+    return KEYBOARD_QUEUE_CAPACITY -
+           (_keyboard_queue_tail - _keyboard_queue_head);
+}
+
+fn keyboard_queue_dropped() -> u32 {
+    return _keyboard_queue_drop_count;
+}
+
+// Consume one IRQ1 byte, enqueue translated input, and release the master
+// PIC's in-service bit. EOI is sent even for a modifier, release, unsupported
+// key, or full queue so one scancode cannot block later interrupts.
+fn keyboard_handle_irq() {
+    let scancode: u8 = keyboard_read_scancode();
+    let ch: u8 = keyboard_handle_scancode(scancode);
+    if ch != KEY_EVENT_NONE {
+        _keyboard_queue_push(ch);
+    }
+    io_outb(PIC_MASTER_COMMAND_PORT, PIC_END_OF_INTERRUPT);
+}
+
 fn _keyboard_letter(scancode: u8) -> u8 {
-    if scancode == 0x10 { return (u8)'q'; }
-    if scancode == 0x11 { return (u8)'w'; }
-    if scancode == 0x12 { return (u8)'e'; }
-    if scancode == 0x13 { return (u8)'r'; }
-    if scancode == 0x14 { return (u8)'t'; }
-    if scancode == 0x15 { return (u8)'y'; }
-    if scancode == 0x16 { return (u8)'u'; }
-    if scancode == 0x17 { return (u8)'i'; }
-    if scancode == 0x18 { return (u8)'o'; }
-    if scancode == 0x19 { return (u8)'p'; }
-    if scancode == 0x1e { return (u8)'a'; }
-    if scancode == 0x1f { return (u8)'s'; }
-    if scancode == 0x20 { return (u8)'d'; }
-    if scancode == 0x21 { return (u8)'f'; }
-    if scancode == 0x22 { return (u8)'g'; }
-    if scancode == 0x23 { return (u8)'h'; }
-    if scancode == 0x24 { return (u8)'j'; }
-    if scancode == 0x25 { return (u8)'k'; }
-    if scancode == 0x26 { return (u8)'l'; }
-    if scancode == 0x2c { return (u8)'z'; }
-    if scancode == 0x2d { return (u8)'x'; }
-    if scancode == 0x2e { return (u8)'c'; }
-    if scancode == 0x2f { return (u8)'v'; }
-    if scancode == 0x30 { return (u8)'b'; }
-    if scancode == 0x31 { return (u8)'n'; }
-    if scancode == 0x32 { return (u8)'m'; }
+    if scancode >= 0x10 && scancode <= 0x19 {
+        return (u8)"qwertyuiop"[scancode - 0x10];
+    }
+    if scancode >= 0x1e && scancode <= 0x26 {
+        return (u8)"asdfghjkl"[scancode - 0x1e];
+    }
+    if scancode >= 0x2c && scancode <= 0x32 {
+        return (u8)"zxcvbnm"[scancode - 0x2c];
+    }
     return KEY_EVENT_NONE;
 }
 
 fn _keyboard_number(scancode: u8) -> u8 {
-    if scancode == 0x02 { return (u8)'1'; }
-    if scancode == 0x03 { return (u8)'2'; }
-    if scancode == 0x04 { return (u8)'3'; }
-    if scancode == 0x05 { return (u8)'4'; }
-    if scancode == 0x06 { return (u8)'5'; }
-    if scancode == 0x07 { return (u8)'6'; }
-    if scancode == 0x08 { return (u8)'7'; }
-    if scancode == 0x09 { return (u8)'8'; }
-    if scancode == 0x0a { return (u8)'9'; }
-    if scancode == 0x0b { return (u8)'0'; }
-    return KEY_EVENT_NONE;
+    if scancode < 0x02 || scancode > 0x0b {
+        return KEY_EVENT_NONE;
+    }
+
+    if _keyboard_shift == 0 {
+        return (u8)"1234567890"[scancode - 0x02];
+    }
+    return (u8)"!@#$%^&*()"[scancode - 0x02];
 }
 
 fn _keyboard_shifted_letter(ch: u8) -> u8 {
@@ -124,33 +147,18 @@ fn _keyboard_shifted_letter(ch: u8) -> u8 {
     return ch;
 }
 
-fn _keyboard_shifted_number(scancode: u8, ch: u8) -> u8 {
-    if _keyboard_shift == 0 { return ch; }
-    if scancode == 0x02 { return (u8)'!'; }
-    if scancode == 0x03 { return (u8)'@'; }
-    if scancode == 0x04 { return (u8)'#'; }
-    if scancode == 0x05 { return (u8)'$'; }
-    if scancode == 0x06 { return (u8)'%'; }
-    if scancode == 0x07 { return (u8)'^'; }
-    if scancode == 0x08 { return (u8)'&'; }
-    if scancode == 0x09 { return (u8)'*'; }
-    if scancode == 0x0a { return (u8)'('; }
-    if scancode == 0x0b { return (u8)')'; }
-    return ch;
-}
-
-// Translate one set-1 scancode.  The caller may feed bytes from an IRQ
-// handler, a polling loop, or a deterministic unit test.  Only make codes
-// produce ASCII; break codes are consumed to update Shift and return zero.
+// Translate one set-1 scancode. The IRQ handler and deterministic unit tests
+// share this stateful boundary. Only make codes produce ASCII; break codes
+// update Shift and return zero.
 fn keyboard_handle_scancode(scancode: u8) -> u8 {
     if scancode == KEYBOARD_LEFT_SHIFT || scancode == KEYBOARD_RIGHT_SHIFT {
-        _keyboard_shift = 1;
+        _keyboard_shift = (u8)1;
         return KEY_EVENT_NONE;
     }
 
     if scancode == KEYBOARD_LEFT_SHIFT_BREAK ||
        scancode == KEYBOARD_RIGHT_SHIFT_BREAK {
-        _keyboard_shift = 0;
+        _keyboard_shift = (u8)0;
         return KEY_EVENT_NONE;
     }
 
@@ -166,7 +174,7 @@ fn keyboard_handle_scancode(scancode: u8) -> u8 {
 
     let number: u8 = _keyboard_number(scancode);
     if number != KEY_EVENT_NONE {
-        return _keyboard_shifted_number(scancode, number);
+        return number;
     }
 
     let letter: u8 = _keyboard_letter(scancode);
@@ -175,13 +183,4 @@ fn keyboard_handle_scancode(scancode: u8) -> u8 {
     }
 
     return KEY_EVENT_NONE;
-}
-
-// Polling convenience for the early shell.  Interrupt code can call
-// keyboard_handle_scancode directly after reading port 0x60 instead.
-fn keyboard_poll() -> u8 {
-    if keyboard_has_data() == 0 {
-        return KEY_EVENT_NONE;
-    }
-    return keyboard_handle_scancode(keyboard_read_scancode());
 }

@@ -18,7 +18,8 @@ for tool in zc i686-elf-gcc i686-elf-ld i686-elf-nm grub-file grub-mkrescue qemu
     chmod 755 "$tool_dir/$tool"
 done
 
-output=$(env -u ZC -u CROSS_PREFIX -u CROSS_CC -u CROSS_LD -u CROSS_NM \
+output=$(env -u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES \
+    -u ZC -u CROSS_PREFIX -u CROSS_CC -u CROSS_LD -u CROSS_NM \
     PATH="$tool_dir:/usr/bin:/bin" "$make_bin" \
     --no-print-directory -C "$repo_root" -n check-tools)
 

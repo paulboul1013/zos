@@ -126,10 +126,7 @@ fn zos_isr_dispatch(vector: U32, error_code: U32) {
     }
 
     if (vector == 33) {
-        let ch: U8 = keyboard_handle_irq();
-        if (ch != 0) {
-            shell_feed_char(ch);
-        }
+        keyboard_handle_irq();
     }
 }
 
@@ -168,8 +165,7 @@ extern fn _zos_irq_stub_address(irq: U32) -> U32;
 extern fn _zos_idt_load();
 
 extern fn timer_handle_irq();
-extern fn keyboard_handle_irq() -> U8;
-extern fn shell_feed_char(ch: U8);
+extern fn keyboard_handle_irq();
 
 let zos_interrupts_initialized: U32 = 0;
 

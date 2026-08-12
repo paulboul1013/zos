@@ -52,7 +52,8 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic -fno-stack-protector
 LDFLAGS := -T arch/i686/linker.ld -nostdlib -ffreestanding -fno-pie -m32
 
 .PHONY: all check-tools check-abi test-toolchain test-console test-interrupt-memory \
-	test-timer test-keyboard test-shell test-task iso qemu test-iso test boot.o kernel clean
+	test-timer test-keyboard test-keyboard-queue test-shell test-shell-task \
+	test-task iso qemu test-iso test boot.o kernel clean
 
 all: kernel
 
@@ -85,7 +86,7 @@ $(BUILD)/%.o: $(BUILD)/%.c
 check-abi: $(KERNEL_O)
 	@set -eu; \
 	$(NM) -g --defined-only $(KERNEL_O) | awk '$$3 == "kernel_main" { found = 1 } END { exit !found }'; \
-	unexpected=$$($(NM) -u $(KERNEL_O) | awk '$$2 !~ /^(console_init|console_write|serial_init|serial_write|zos_memory_init|interrupts_init|zos_interrupts_enable|timer_init|keyboard_init|shell_init|task_init|task_create|task_yield|__kernel_end|__heap_end)$$/'); \
+	unexpected=$$($(NM) -u $(KERNEL_O) | awk '$$2 !~ /^(console_init|console_write|serial_init|serial_write|zos_memory_init|interrupts_init|zos_interrupts_enable|timer_init|keyboard_init|shell_task|task_init|task_create|task_yield|__kernel_end|__heap_end)$$/'); \
 	if [ -n "$$unexpected" ]; then \
 		echo "unexpected unresolved symbols in $(KERNEL_O):" >&2; \
 		echo "$$unexpected" >&2; exit 1; \
@@ -138,8 +139,14 @@ test-timer:
 test-keyboard:
 	./tests/keyboard_static.sh
 
+test-keyboard-queue:
+	./tests/keyboard_queue_static.sh
+
 test-shell:
 	./tests/shell_static.sh
+
+test-shell-task:
+	./tests/shell_task_static.sh
 
 test-task: kernel
 	./tests/task_static.sh
@@ -151,7 +158,8 @@ test-toolchain:
 test-iso: iso
 	./tests/iso_test.sh
 
-test: kernel test-toolchain test-console test-interrupt-memory test-timer test-keyboard test-shell test-task test-iso
+test: kernel test-toolchain test-console test-interrupt-memory test-timer \
+	test-keyboard test-keyboard-queue test-shell test-shell-task test-task test-iso
 	./tests/boot_test.sh
 
 boot.o: $(BOOT_O)
