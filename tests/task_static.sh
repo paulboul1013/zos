@@ -57,7 +57,7 @@ grep -q '_zos_task_prepare_stack' "$task_source"
     -c "$switch_source" -o "$switch_object"
 "$cross_ld" -r "$task_object" "$switch_object" -o "$reloc_object"
 
-for symbol in task_init task_create task_yield task_current task_count task_state; do
+for symbol in task_init task_create task_yield task_current task_count task_live_count task_state; do
     "$cross_nm" -g --defined-only "$task_object" | \
         grep -Eq "[[:space:]]$symbol$"
 done
@@ -77,6 +77,7 @@ fi
     "$generated" -x c -o "$out_dir/harness" - <<'EOF'
 #include <assert.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 extern void task_init(void);
@@ -89,8 +90,22 @@ extern uint8_t task_state(uint32_t id);
 enum {
     TASK_UNUSED = 0,
     TASK_READY = 1,
-    TASK_RUNNING = 2
+    TASK_RUNNING = 2,
+    TASK_INVALID_STATE = 0xff
 };
+
+uint32_t zos_interrupt_depth;
+static uint32_t irq_flags = 0x202;
+uint32_t zos_irq_save(void) {
+    uint32_t saved = irq_flags;
+    irq_flags &= ~0x200U;
+    return saved;
+}
+void zos_irq_restore(uint32_t flags) { irq_flags = flags; }
+bool zos_irq_enabled(void) { return (irq_flags & 0x200U) != 0; }
+void zos_cpu_safe_halt(void) { assert(!"unexpected idle halt"); }
+void zos_cpu_halt_forever(void) { assert(!"unexpected permanent halt"); }
+void serial_write(const char *text) { (void)text; }
 
 static unsigned prepare_calls;
 static unsigned switch_calls;
@@ -125,7 +140,7 @@ int main(void) {
     assert(task_count() == 1);
     assert(task_current() == 0);
     assert(task_state(0) == TASK_RUNNING);
-    assert(task_state(1) == TASK_UNUSED);
+    assert(task_state(1) == TASK_INVALID_STATE);
 
     task_yield();
     assert(switch_calls == 0);
@@ -144,7 +159,7 @@ int main(void) {
     assert(task_state(id_a) == TASK_READY);
     assert(task_state(id_b) == TASK_READY);
     assert(task_state(id_c) == TASK_READY);
-    assert(task_state(99) == TASK_UNUSED);
+    assert(task_state(99) == TASK_INVALID_STATE);
 
     task_yield();
     assert(task_current() == 1);

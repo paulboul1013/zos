@@ -17,6 +17,15 @@ def KEYBOARD_RIGHT_SHIFT: u8 = (u8)0x36;
 def KEYBOARD_LEFT_SHIFT_BREAK: u8 = (u8)0xaa;
 def KEYBOARD_RIGHT_SHIFT_BREAK: u8 = (u8)0xb6;
 def KEYBOARD_QUEUE_CAPACITY: u32 = 64;
+// Owned by the keyboard module; zero is reserved for no wait channel.
+def KEYBOARD_WAIT_CHANNEL: u32 = 1;
+extern fn zos_irq_save() -> u32;
+extern fn zos_irq_restore(flags: u32);
+extern fn task_block_on_locked(channel: u32) -> bool;
+extern fn task_wake(channel: u32) -> u32;
+extern fn task_current() -> u32;
+extern fn task_state(id: u32) -> u8;
+raw { extern uint32_t zos_interrupt_depth; }
 
 // Return values are ASCII bytes.  Zero means that the scancode is a modifier,
 // a key-release event, an unsupported key, or that no byte was available.
@@ -63,7 +72,7 @@ fn keyboard_read_scancode() -> u8 {
 // IRQ1 is the only producer and the shell task is the only consumer. One
 // storage slot remains empty so equal head/tail values always mean empty.
 // Dropping the newest byte on overflow preserves the order of queued input.
-fn _keyboard_queue_push(ch: u8) {
+fn _keyboard_queue_push(ch: u8) -> bool {
     let next: u32 = _keyboard_queue_head + 1;
     if next >= KEYBOARD_QUEUE_CAPACITY {
         next = 0;
@@ -71,11 +80,12 @@ fn _keyboard_queue_push(ch: u8) {
 
     if next == _keyboard_queue_tail {
         _keyboard_queue_drop_count = _keyboard_queue_drop_count + 1;
-        return;
+        return false;
     }
 
     _keyboard_queue[_keyboard_queue_head] = ch;
     _keyboard_queue_head = next;
+    return true;
 }
 
 fn keyboard_queue_pop() -> u8 {
@@ -89,6 +99,29 @@ fn keyboard_queue_pop() -> u8 {
         _keyboard_queue_tail = 0;
     }
     return ch;
+}
+
+// Only a running non-idle task with IRQ enabled may wait. A rejected
+// contract returns zero once; a spurious notification rechecks the queue.
+fn keyboard_read_blocking() -> u8 {
+    while true {
+        let flags: u32 = zos_irq_save();
+        let id: u32 = task_current();
+        if (flags & (u32)0x200) == 0 || zos_interrupt_depth != 0 ||
+           id == 0 || id == (u32)0xFFFFFFFF || task_state(id) != (u8)2 {
+            zos_irq_restore(flags);
+            return KEY_EVENT_NONE;
+        }
+        let ch: u8 = keyboard_queue_pop();
+        if ch != KEY_EVENT_NONE {
+            zos_irq_restore(flags);
+            return ch;
+        }
+        let waited: bool = task_block_on_locked(KEYBOARD_WAIT_CHANNEL);
+        zos_irq_restore(flags);
+        if !waited { return KEY_EVENT_NONE; }
+    }
+    return KEY_EVENT_NONE;
 }
 
 fn keyboard_queue_count() -> u32 {
@@ -110,7 +143,9 @@ fn keyboard_handle_irq() {
     let scancode: u8 = keyboard_read_scancode();
     let ch: u8 = keyboard_handle_scancode(scancode);
     if ch != KEY_EVENT_NONE {
-        _keyboard_queue_push(ch);
+        if _keyboard_queue_push(ch) {
+            task_wake(KEYBOARD_WAIT_CHANNEL);
+        }
     }
     io_outb(PIC_MASTER_COMMAND_PORT, PIC_END_OF_INTERRUPT);
 }

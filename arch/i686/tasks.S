@@ -9,6 +9,7 @@
 .code32
 
 .extern _task_exit
+.extern _task_reap_switched
 
 .globl _zos_task_prepare_stack
 .type _zos_task_prepare_stack, @function
@@ -47,6 +48,12 @@ _zos_task_context_switch:
     movl 40(%esp), %eax      /* uint32_t *old_sp */
     movl %esp, (%eax)
     movl 44(%esp), %esp      /* uint32_t new_sp */
+
+    /* Preserve the frame above an aligned C call area on the new stack. */
+    movl %esp, %ebx
+    andl $-16, %esp
+    call _task_reap_switched
+    movl %ebx, %esp
 
     popal
     popfl

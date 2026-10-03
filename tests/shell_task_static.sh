@@ -12,19 +12,17 @@ kernel_source="$repo_root/kernel/kernel.zc"
     "$interrupt_source"
 
 grep -q 'fn shell_task()' "$shell_source"
-grep -q 'keyboard_queue_pop' "$shell_source"
-grep -q 'task_yield' "$shell_source"
+grep -q 'keyboard_read_blocking' "$shell_source"
+! grep -q 'task_yield' "$shell_source"
 grep -q 'task_create(shell_task)' "$kernel_source"
 grep -q 'shell task: ready' "$kernel_source"
 grep -q 'shell task: running' "$kernel_source"
 ! grep -Eq '_task_demo_|task A[12]|task B[12]|tasks: done' "$kernel_source"
 
-# The idle loop must offer READY tasks CPU time before halting until an IRQ.
-awk '
-    /while true/ { in_loop = 1 }
-    in_loop && /task_yield\(\)/ { saw_yield = 1 }
-    in_loop && /"hlt"/ && saw_yield { saw_hlt_after_yield = 1 }
-    END { exit saw_hlt_after_yield ? 0 : 1 }
-' "$kernel_source"
+# Boot hands its context to scheduler-owned idle, which handles READY tasks
+# and the atomic interrupt-enable/halt boundary.
+grep -q 'task_idle()' "$kernel_source"
+! grep -q '"hlt"' "$kernel_source"
+grep -q 'zos_cpu_safe_halt()' "$repo_root/kernel/task.zc"
 
 echo "shell task static: PASS (IRQ boundary + task integration + idle loop)"

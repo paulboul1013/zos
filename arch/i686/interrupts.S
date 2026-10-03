@@ -26,6 +26,56 @@ zos_cpu_sti:
     ret
 .size zos_cpu_sti, .-zos_cpu_sti
 
+/* External calls also act as compiler memory boundaries for generated C.
+ * Restore only IF: arithmetic flags belong to the caller's instruction flow. */
+.globl zos_irq_save
+.type zos_irq_save, @function
+zos_irq_save:
+    pushfl
+    popl %eax
+    cli
+    ret
+.size zos_irq_save, .-zos_irq_save
+
+.globl zos_irq_restore
+.type zos_irq_restore, @function
+zos_irq_restore:
+    testl $0x200, 4(%esp)
+    jz 1f
+    sti
+    ret
+1:
+    cli
+    ret
+.size zos_irq_restore, .-zos_irq_restore
+
+.globl zos_irq_enabled
+.type zos_irq_enabled, @function
+zos_irq_enabled:
+    pushfl
+    popl %eax
+    shrl $9, %eax
+    andl $1, %eax
+    ret
+.size zos_irq_enabled, .-zos_irq_enabled
+
+.globl zos_cpu_safe_halt
+.type zos_cpu_safe_halt, @function
+zos_cpu_safe_halt:
+    sti
+    hlt
+    ret
+.size zos_cpu_safe_halt, .-zos_cpu_safe_halt
+
+.globl zos_cpu_halt_forever
+.type zos_cpu_halt_forever, @function
+zos_cpu_halt_forever:
+    cli
+1:
+    hlt
+    jmp 1b
+.size zos_cpu_halt_forever, .-zos_cpu_halt_forever
+
 /* Return the selector currently used by the executing code segment.  GRUB
  * and QEMU's direct -kernel loader do not promise the same GDT layout, so
  * IDT gates must target the active CS instead of assuming selector 0x08. */

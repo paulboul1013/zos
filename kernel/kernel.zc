@@ -16,6 +16,7 @@ extern fn zos_interrupts_enable();
 extern fn task_init();
 extern fn task_create(entry: fn*()) -> U32;
 extern fn task_yield();
+extern fn task_idle();
 
 raw {
     extern char __kernel_end;
@@ -54,18 +55,12 @@ fn kernel_main() {
         serial_write("shell task: create failed\n");
     } else {
         serial_write("shell task: ready\n");
-        // Shell initializes its prompt, observes an empty queue, then yields
+        // Shell initializes its prompt, observes an empty queue, then blocks
         // back here. Reaching this marker proves the real task switched once.
         task_yield();
         serial_write("shell task: running\n");
     }
 
-    // Give long-lived READY tasks a cooperative turn, then sleep until PIT or
-    // PS/2 wakes the boot task. The kernel never returns to the boot stub.
-    while true {
-        task_yield();
-        asm volatile {
-            "hlt"
-        }
-    }
+    // Task 0 checks READY work with IRQ masked before safely halting.
+    task_idle();
 }

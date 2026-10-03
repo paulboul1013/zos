@@ -1,37 +1,51 @@
 // ZOS cooperative Ring 0 task scheduler.
 //
-// Task 0 is the already-running boot context. Slots 1..3 own static 4 KiB
-// stacks. Registers and EFLAGS live in each task's saved stack frame, so the
-// scheduler only needs the saved ESP and lifecycle state for each task.
+// Boot task 0 uses the boot stack. Slots 1..3 use static 4 KiB stacks.
+// Public IDs contain the slot and generation. The scheduler uses slot indices.
+// Each saved frame contains registers and EFLAGS.
 
 def TASK_MAX: u32 = 4;
 def TASK_STACK_SIZE: u32 = 4096;
 def TASK_INVALID_ID: u32 = (u32)0xFFFFFFFF;
+def TASK_INVALID_STATE: u8 = (u8)0xFF;
+def TASK_LAST_GENERATION: u32 = (u32)0x3FFFFFFE;
 
 def TASK_UNUSED: u8 = (u8)0;
 def TASK_READY: u8 = (u8)1;
 def TASK_RUNNING: u8 = (u8)2;
 def TASK_TERMINATED: u8 = (u8)3;
+def TASK_BLOCKED: u8 = (u8)4;
+
+extern fn zos_irq_save() -> u32;
+extern fn zos_irq_restore(flags: u32);
+extern fn zos_irq_enabled() -> bool;
+extern fn zos_cpu_safe_halt();
+extern fn zos_cpu_halt_forever();
+extern fn serial_write(text: const char*);
+raw { extern uint32_t zos_interrupt_depth; }
 
 extern fn _zos_task_prepare_stack(base: u8*, size: u32,
                                   entry: fn*()) -> u32;
 extern fn _zos_task_context_switch(old_sp: u32*, new_sp: u32);
 
-// Task 0 uses boot.S's existing stack; only the three created tasks need
-// storage here. Keeping stacks static makes lifetime and ownership explicit.
+// Work slots retain their static stacks across task lifetimes.
 let _task_stacks: u8[12288];
 let _task_saved_sp: u32[4];
 let _task_states: u8[4];
-let _task_current_id: u32 = 0;
+let _task_wait_channels: u32[4];
+let _task_generations: u32[4];
+let _task_retired: bool[4];
+let _task_current_slot: u32 = 0;
 let _task_created_count: u32 = 0;
-let _task_next_id: u32 = 1;
+let _task_live_count: u32 = 0;
+let _task_pending_reap: u32 = TASK_INVALID_ID;
 let _task_initialized: bool = false;
 
 fn _task_find_next() -> u32 {
     let offset: u32 = 1;
 
     while offset < TASK_MAX {
-        let candidate: u32 = (_task_current_id + offset) % TASK_MAX;
+        let candidate: u32 = (_task_current_slot + offset) % TASK_MAX;
         if _task_states[candidate] == TASK_READY {
             return candidate;
         }
@@ -42,87 +56,255 @@ fn _task_find_next() -> u32 {
 }
 
 fn task_init() {
+    let flags: u32 = zos_irq_save();
+    if _task_initialized {
+        zos_irq_restore(flags);
+        return;
+    }
     let id: u32 = 0;
     while id < TASK_MAX {
         _task_saved_sp[id] = 0;
         _task_states[id] = TASK_UNUSED;
+        _task_wait_channels[id] = 0;
+        _task_generations[id] = 0;
+        _task_retired[id] = false;
+        _task_reset_counters(id);
         id = id + 1;
     }
 
-    _task_current_id = 0;
+    _task_current_slot = 0;
     _task_created_count = 1;
-    _task_next_id = 1;
+    _task_live_count = 1;
+    _task_pending_reap = TASK_INVALID_ID;
     _task_states[0] = TASK_RUNNING;
     _task_initialized = true;
+    zos_irq_restore(flags);
 }
 
 fn task_create(entry: fn*()) -> u32 {
-    if !_task_initialized || entry == NULL || _task_next_id >= TASK_MAX {
+    let flags: u32 = zos_irq_save();
+    if !_task_initialized || entry == NULL || zos_interrupt_depth != 0 {
+        zos_irq_restore(flags);
         return TASK_INVALID_ID;
     }
 
-    let id: u32 = _task_next_id;
+    let id: u32 = 1;
+    while id < TASK_MAX {
+        if _task_states[id] == TASK_UNUSED && !_task_retired[id] { break; }
+        id = id + 1;
+    }
+    if id == TASK_MAX {
+        zos_irq_restore(flags);
+        return TASK_INVALID_ID;
+    }
     let stack_offset: u32 = (id - 1) * TASK_STACK_SIZE;
     let saved_sp: u32 = _zos_task_prepare_stack(
         &_task_stacks[stack_offset], TASK_STACK_SIZE, entry
     );
     if saved_sp == 0 {
+        zos_irq_restore(flags);
         return TASK_INVALID_ID;
     }
 
     _task_saved_sp[id] = saved_sp;
+    _task_wait_channels[id] = 0;
+    _task_reset_counters(id);
     _task_states[id] = TASK_READY;
-    _task_next_id = id + 1;
     _task_created_count = _task_created_count + 1;
-    return id;
+    _task_live_count = _task_live_count + 1;
+    let task_id: u32 = (_task_generations[id] << 2) | id;
+    zos_irq_restore(flags);
+    return task_id;
 }
 
-fn task_yield() {
-    if !_task_initialized {
-        return;
+// Assembly calls this helper on the selected stack before it restores EFLAGS.
+// The CPU no longer uses the terminated stack. IRQ remains disabled.
+fn _task_reap_switched() {
+    let slot: u32 = _task_pending_reap;
+    if slot == TASK_INVALID_ID { return; }
+    _task_states[slot] = TASK_UNUSED;
+    _task_saved_sp[slot] = 0;
+    _task_wait_channels[slot] = 0;
+    if _task_generations[slot] == TASK_LAST_GENERATION {
+        _task_retired[slot] = true;
+    } else {
+        _task_generations[slot] = _task_generations[slot] + 1;
     }
+    _task_pending_reap = TASK_INVALID_ID;
+}
 
-    let previous: u32 = _task_current_id;
-    let next: u32 = _task_find_next();
-    if next == TASK_INVALID_ID {
-        return;
-    }
-
+// All state transitions and the stack handoff happen with IF clear.
+fn _task_switch_locked(next: u32) {
+    let previous: u32 = _task_current_slot;
     if _task_states[previous] == TASK_RUNNING {
         _task_states[previous] = TASK_READY;
     }
     _task_states[next] = TASK_RUNNING;
-    _task_current_id = next;
-
-    _zos_task_context_switch(&_task_saved_sp[previous],
-                             _task_saved_sp[next]);
+    _task_current_slot = next;
+    _task_note_dispatch(next);
+    _zos_task_context_switch(&_task_saved_sp[previous], _task_saved_sp[next]);
 }
 
-fn task_current() -> u32 {
-    return _task_current_id;
-}
-
-fn task_count() -> u32 {
-    return _task_created_count;
-}
-
-fn task_state(id: u32) -> u8 {
-    if id >= TASK_MAX {
-        return TASK_UNUSED;
+fn task_yield() {
+    let flags: u32 = zos_irq_save();
+    if _task_initialized && zos_interrupt_depth == 0 {
+        let next: u32 = _task_find_next();
+        if next != TASK_INVALID_ID {
+            _task_switch_locked(next);
+        }
     }
-    return _task_states[id];
+    zos_irq_restore(flags);
 }
 
-// A task entry function returns into the assembly exit trampoline, which
-// calls this function with normal cdecl stack alignment. A terminated task is
-// never READY again, so yielding here cannot resume this context.
-fn _task_exit() {
-    _task_states[_task_current_id] = TASK_TERMINATED;
-    task_yield();
+// Caller protects the condition check with the same IRQ-disabled interval.
+fn task_block_on_locked(channel: u32) -> bool {
+    if !_task_initialized || channel == 0 || zos_irq_enabled() ||
+       zos_interrupt_depth != 0 || _task_current_slot == 0 ||
+       _task_current_slot >= TASK_MAX {
+        return false;
+    }
+    if _task_states[_task_current_slot] != TASK_RUNNING {
+        return false;
+    }
+    let next: u32 = _task_find_next();
+    if next == TASK_INVALID_ID { return false; }
+    _task_wait_channels[_task_current_slot] = channel;
+    _task_states[_task_current_slot] = TASK_BLOCKED;
+    _task_note_block(_task_current_slot);
+    _task_switch_locked(next);
+    return true;
+}
 
+fn task_wake(channel: u32) -> u32 {
+    let flags: u32 = zos_irq_save();
+    let count: u32 = 0;
+    let id: u32 = 1;
+    if _task_initialized && channel != 0 {
+        while id < TASK_MAX {
+            if _task_states[id] == TASK_BLOCKED &&
+               _task_wait_channels[id] == channel {
+                _task_wait_channels[id] = 0;
+                _task_states[id] = TASK_READY;
+                _task_note_wake(id);
+                count = count + 1;
+            }
+            id = id + 1;
+        }
+    }
+    zos_irq_restore(flags);
+    return count;
+}
+
+fn task_idle() {
+    if !_task_initialized || _task_current_slot != 0 ||
+       !zos_irq_enabled() || zos_interrupt_depth != 0 {
+        return;
+    }
     while true {
-        asm volatile {
-            "hlt"
+        let flags: u32 = zos_irq_save();
+        let next: u32 = _task_find_next();
+        if next != TASK_INVALID_ID {
+            _task_switch_locked(next);
+            zos_irq_restore(flags);
+        } else {
+            // IRQ remains disabled from the ready check to adjacent STI and HLT.
+            zos_cpu_safe_halt();
         }
     }
 }
+
+fn task_current() -> u32 {
+    let flags: u32 = zos_irq_save();
+    let id: u32 = TASK_INVALID_ID;
+    if _task_initialized && _task_current_slot < TASK_MAX {
+        let slot: u32 = _task_current_slot;
+        if _task_states[slot] == TASK_RUNNING && !_task_retired[slot] {
+            id = (_task_generations[slot] << 2) | slot;
+        }
+    }
+    zos_irq_restore(flags);
+    return id;
+}
+
+fn task_count() -> u32 {
+    let flags: u32 = zos_irq_save();
+    let count: u32 = 0;
+    if _task_initialized { count = _task_created_count; }
+    zos_irq_restore(flags);
+    return count;
+}
+
+fn task_live_count() -> u32 {
+    let flags: u32 = zos_irq_save();
+    let count: u32 = 0;
+    if _task_initialized { count = _task_live_count; }
+    zos_irq_restore(flags);
+    return count;
+}
+
+fn task_state(id: u32) -> u8 {
+    let flags: u32 = zos_irq_save();
+    let state: u8 = TASK_INVALID_STATE;
+    let slot: u32 = id & (u32)3;
+    let generation: u32 = id >> 2;
+    if _task_initialized && generation <= TASK_LAST_GENERATION &&
+       (slot != 0 || generation == 0) {
+        if !_task_retired[slot] && _task_states[slot] != TASK_UNUSED &&
+           _task_generations[slot] == generation {
+            state = _task_states[slot];
+        }
+    }
+    zos_irq_restore(flags);
+    return state;
+}
+
+// A contract error stops the kernel with IRQ disabled.
+fn _task_contract_error(message: const char*) {
+    serial_write(message);
+    while true { zos_cpu_halt_forever(); }
+}
+
+// Keep the terminated slot unavailable until assembly changes the stack.
+fn _task_exit() {
+    zos_irq_save();
+    if !_task_initialized || _task_current_slot == 0 ||
+       _task_current_slot >= TASK_MAX || zos_interrupt_depth != 0 {
+        _task_contract_error("task exit: invalid context\n");
+    }
+    let next: u32 = _task_find_next();
+    if next == TASK_INVALID_ID {
+        _task_contract_error("task exit: no ready fallback\n");
+    }
+    _task_wait_channels[_task_current_slot] = 0;
+    _task_states[_task_current_slot] = TASK_TERMINATED;
+    _task_live_count = _task_live_count - 1;
+    _task_pending_reap = _task_current_slot;
+    _task_switch_locked(next);
+    _task_contract_error("task exit: terminated context resumed\n");
+}
+
+// Test builds observe transitions without logging or changing IRQ scheduling.
+raw {
+#ifdef ZOS_EVENT_WAIT_TEST
+    uint32_t _task_dispatch_count[4];
+    uint32_t _task_block_count[4];
+    uint32_t _task_wake_count[4];
+    static void _task_reset_counters(uint32_t id) {
+        _task_dispatch_count[id] = 0;
+        _task_block_count[id] = 0;
+        _task_wake_count[id] = 0;
+    }
+    static void _task_note_dispatch(uint32_t id) { _task_dispatch_count[id]++; }
+    static void _task_note_block(uint32_t id) { _task_block_count[id]++; }
+    static void _task_note_wake(uint32_t id) { _task_wake_count[id]++; }
+#else
+    static void _task_reset_counters(uint32_t id) { (void)id; }
+    static void _task_note_dispatch(uint32_t id) { (void)id; }
+    static void _task_note_block(uint32_t id) { (void)id; }
+    static void _task_note_wake(uint32_t id) { (void)id; }
+#endif
+}
+extern fn _task_note_dispatch(id: u32);
+extern fn _task_note_block(id: u32);
+extern fn _task_note_wake(id: u32);
+extern fn _task_reset_counters(id: u32);

@@ -31,6 +31,7 @@ generated="$out_dir/keyboard.c"
     "$generated" -x c -o "$out_dir/harness" - <<'EOF'
 #include <assert.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 extern void keyboard_reset(void);
@@ -39,6 +40,30 @@ extern uint8_t keyboard_handle_scancode(uint8_t scancode);
 extern uint8_t keyboard_queue_pop(void);
 extern uint32_t keyboard_queue_count(void);
 extern uint32_t keyboard_queue_dropped(void);
+
+uint32_t zos_interrupt_depth;
+static uint32_t irq_flags = 0x202;
+uint32_t zos_irq_save(void) {
+    uint32_t saved = irq_flags;
+    irq_flags &= ~0x200U;
+    return saved;
+}
+void zos_irq_restore(uint32_t flags) { irq_flags = flags; }
+bool zos_irq_enabled(void) { return (irq_flags & 0x200U) != 0; }
+uint32_t task_current(void) { return 1; }
+uint8_t task_state(uint32_t id) { (void)id; return 2; }
+bool task_block_on_locked(uint32_t channel) {
+    (void)channel;
+    assert(!"queue test must not block");
+    return false;
+}
+static unsigned wake_count;
+uint32_t task_wake(uint32_t channel) {
+    assert(channel != 0);
+    assert(keyboard_queue_count() != 0); /* publish data before notifying */
+    wake_count++;
+    return 0;
+}
 
 static uint8_t next_scancode;
 static unsigned eoi_count;
@@ -64,6 +89,7 @@ static void irq_scancode(uint8_t scancode) {
 static void reset_fixture(void) {
     keyboard_reset();
     eoi_count = 0;
+    wake_count = 0;
 }
 
 static void test_empty_queue(void) {
@@ -79,6 +105,7 @@ static void test_irq_fifo_and_eoi(void) {
     irq_scancode(0x30U); /* b */
     irq_scancode(0x2eU); /* c */
     assert(eoi_count == 3);
+    assert(wake_count == 3);
     assert(keyboard_queue_count() == 3);
     assert(keyboard_queue_pop() == (uint8_t)'a');
     assert(keyboard_queue_pop() == (uint8_t)'b');
@@ -90,6 +117,7 @@ static void test_modifier_is_not_queued_but_gets_eoi(void) {
     reset_fixture();
     irq_scancode(0x2aU); /* left Shift make */
     assert(eoi_count == 1);
+    assert(wake_count == 0);
     assert(keyboard_queue_count() == 0);
 }
 
@@ -131,6 +159,7 @@ static void test_full_queue_drops_newest(void) {
     }
     assert(keyboard_queue_pop() == 0);
     assert(eoi_count == 64);
+    assert(wake_count == 63);
 }
 
 static void test_set1_ascii_rows(void) {

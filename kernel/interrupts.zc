@@ -109,7 +109,10 @@ let zos_interrupt_halted: U32 = 0;
 // Called from every exception/IRQ stub.  The default policy records the
 // vector and error code, then marks fatal CPU exceptions as halted.  A later
 // shell/console task can replace the policy while preserving this ABI.
+let zos_interrupt_depth: u32 = 0;
+
 fn zos_isr_dispatch(vector: U32, error_code: U32) {
+    zos_interrupt_depth = zos_interrupt_depth + 1;
     zos_interrupt_last_vector = vector;
     zos_interrupt_last_error = error_code;
     zos_interrupt_count = zos_interrupt_count + 1;
@@ -117,17 +120,20 @@ fn zos_isr_dispatch(vector: U32, error_code: U32) {
     // CPU exceptions 0..31 are fatal until a console panic path exists.
     if (vector < 32) {
         zos_interrupt_halted = 1;
+        zos_interrupt_depth = zos_interrupt_depth - 1;
         return;
     }
 
     if (vector == 32) {
         timer_handle_irq();
+        zos_interrupt_depth = zos_interrupt_depth - 1;
         return;
     }
 
     if (vector == 33) {
         keyboard_handle_irq();
     }
+    zos_interrupt_depth = zos_interrupt_depth - 1;
 }
 
 fn zos_interrupt_get_last_vector() -> U32 {
@@ -198,3 +204,9 @@ fn zos_interrupts_enable() {
 fn zos_interrupts_disable() {
     zos_cpu_cli();
 }
+
+// External assembly calls are compiler memory barriers (no pure/const attributes).
+extern fn zos_irq_save() -> u32;
+extern fn zos_irq_restore(flags: u32);
+extern fn zos_irq_enabled() -> bool;
+extern fn zos_cpu_safe_halt();

@@ -13,8 +13,7 @@ def SHELL_BUFFER_CAPACITY: u32 = 4096;
 extern fn console_putc(ch: u8);
 extern fn console_write(text: const char*);
 extern fn console_clear();
-extern fn keyboard_queue_pop() -> u8;
-extern fn task_yield();
+extern fn keyboard_read_blocking() -> u8;
 
 // Keep one byte for the terminating zero.  The buffer is only compared by
 // this module; it does not rely on libc string functions or hosted stdlib.
@@ -101,16 +100,16 @@ fn shell_feed_char(ch: u8) {
 }
 
 // Long-lived Ring 0 consumer for the keyboard IRQ queue. It drains queued
-// input in FIFO order and cooperatively yields whenever no input is pending.
+// input in FIFO order and blocks whenever no input is pending.
 fn shell_task() {
     shell_init();
 
     while true {
-        let ch: u8 = keyboard_queue_pop();
+        let ch: u8 = keyboard_read_blocking();
         if ch == (u8)0 {
-            task_yield();
-        } else {
-            shell_feed_char(ch);
+            console_write("shell task: invalid wait context\n");
+            return;
         }
+        shell_feed_char(ch);
     }
 }

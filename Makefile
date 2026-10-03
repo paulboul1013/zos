@@ -86,7 +86,7 @@ $(BUILD)/%.o: $(BUILD)/%.c
 check-abi: $(KERNEL_O)
 	@set -eu; \
 	$(NM) -g --defined-only $(KERNEL_O) | awk '$$3 == "kernel_main" { found = 1 } END { exit !found }'; \
-	unexpected=$$($(NM) -u $(KERNEL_O) | awk '$$2 !~ /^(console_init|console_write|serial_init|serial_write|zos_memory_init|interrupts_init|zos_interrupts_enable|timer_init|keyboard_init|shell_task|task_init|task_create|task_yield|__kernel_end|__heap_end)$$/'); \
+	unexpected=$$($(NM) -u $(KERNEL_O) | awk '$$2 !~ /^(console_init|console_write|serial_init|serial_write|zos_memory_init|interrupts_init|zos_interrupts_enable|timer_init|keyboard_init|shell_task|task_init|task_create|task_yield|task_idle|__kernel_end|__heap_end)$$/'); \
 	if [ -n "$$unexpected" ]; then \
 		echo "unexpected unresolved symbols in $(KERNEL_O):" >&2; \
 		echo "$$unexpected" >&2; exit 1; \
@@ -159,10 +159,34 @@ test-iso: iso
 	./tests/iso_test.sh
 
 test: kernel test-toolchain test-console test-interrupt-memory test-timer \
-	test-keyboard test-keyboard-queue test-shell test-shell-task test-task test-iso
+	test-keyboard test-keyboard-queue test-shell test-shell-task test-task test-iso \
+	test-irq-flags test-event-wait test-task-lifecycle
 	./tests/boot_test.sh
 
 boot.o: $(BOOT_O)
 
 clean:
 	rm -rf $(BUILD) $(ISO_KERNEL)
+
+.PHONY: test-irq-flags test-event-wait test-event-wait-qemu
+EVENT_WAIT_OPT ?= -O0
+EVENT_WAIT_BOOT ?= direct
+
+test-irq-flags:
+	bash tests/irq_flags_static.sh
+
+test-event-wait:
+	bash tests/event_wait_static.sh
+
+test-event-wait-qemu:
+	python3 tests/event_wait_qemu.py --opt=$(EVENT_WAIT_OPT) --boot=$(EVENT_WAIT_BOOT)
+
+.PHONY: test-task-lifecycle test-task-lifecycle-qemu
+TASK_LIFECYCLE_OPT ?= -O0
+TASK_LIFECYCLE_BOOT ?= direct
+
+test-task-lifecycle:
+	bash tests/task_lifecycle_static.sh
+
+test-task-lifecycle-qemu:
+	python3 tests/task_lifecycle_qemu.py --opt=$(TASK_LIFECYCLE_OPT) --boot=$(TASK_LIFECYCLE_BOOT)

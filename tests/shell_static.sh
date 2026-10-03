@@ -64,7 +64,8 @@ static unsigned clear_calls;
 static uint8_t queued_input[16];
 static size_t queued_input_length;
 static size_t queued_input_index;
-static unsigned yield_calls;
+static unsigned wait_calls;
+static int invalid_wait;
 static jmp_buf shell_task_escape;
 
 static void log_reset(void) {
@@ -90,15 +91,12 @@ void console_clear(void) {
     clear_calls++;
 }
 
-uint8_t keyboard_queue_pop(void) {
+uint8_t keyboard_read_blocking(void) {
     if (queued_input_index < queued_input_length) {
         return queued_input[queued_input_index++];
     }
-    return 0;
-}
-
-void task_yield(void) {
-    yield_calls++;
+    wait_calls++;
+    if (invalid_wait) { return 0; }
     longjmp(shell_task_escape, 1);
 }
 
@@ -157,13 +155,19 @@ int main(void) {
     queued_input[1] = (uint8_t)'b';
     queued_input_length = 2;
     queued_input_index = 0;
-    yield_calls = 0;
+    wait_calls = 0;
     if (setjmp(shell_task_escape) == 0) {
         shell_task();
     }
-    assert(yield_calls == 1);
+    assert(wait_calls == 1);
     assert(queued_input_index == queued_input_length);
     assert(strcmp(log_buffer, "zos> ab") == 0);
+
+    log_reset();
+    invalid_wait = 1;
+    shell_task();
+    assert(wait_calls == 2);
+    assert(strcmp(log_buffer, "zos> shell task: invalid wait context\n") == 0);
 
     puts("shell harness: PASS");
     return 0;
